@@ -1,0 +1,30 @@
+{
+  "api_key": {
+    "type": "string",
+    "default": "",
+    "description": "LLM API Key",
+    "hint": "建议在 WebUI 插件配置中填写，不要写入代码仓库。",
+    "obvious_hint": true
+  },
+  "api_base": {
+    "type": "string",
+    "default": "https://open.bigmodel.cn/api/paas/v4",
+    "description": "LLM API 地址（OpenAI 兼容格式）"
+  },
+  "model": {
+    "type": "string",
+    "default": "glm-4-flash",
+    "description": "模型名称"
+  },
+  "reasoning": {
+    "type": "bool",
+    "default": false,
+    "description": "是否启用推理模式（适配支持该参数的 OpenAI 兼容模型）"
+  },
+  "default_market": {
+    "type": "string",
+    "default": "AUTO",
+    "description": "默认市场",
+    "options": ["AUTO", "CN", "HK", "US"]
+  }
+}

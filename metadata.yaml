@@ -1,0 +1,14 @@
+name: astrbot_plugin_tradingagents
+version: 1.0.0
+author: YYY7C
+description: 基于多智能体辩论架构的 AstrBot 金融分析插件，支持 A 股、港股、美股的智能分析报告生成。
+repo: https://github.com/YYY7C/TradingAgents-AstrBot
+homepage: https://github.com/YYY7C/TradingAgents-AstrBot
+license: AGPL-3.0
+support_platforms:
+  - aiocqhttp
+  - telegram
+  - discord
+astrbot_version: ">=4.16,<5"
+display_name: TradingAgents 金融助手
+python_requires: ">=3.9"

@@ -1,0 +1,299 @@
+"""AstrBot 金融助手插件入口。"""
+
+from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from astrbot.api import logger, AstrBotConfig
+from astrbot.api.star import Context, Star
+
+from .trading_graph_langgraph import TradingGraphLangGraph as FinancialAssistantGraph
+from .data_fetcher import DataFetcher
+from .llm_client import OpenAICompatibleLLM
+from .utils.stock_utils import StockUtils
+
+
+class TradingAssistantPlugin(Star):
+    """金融助手插件"""
+    
+    def __init__(self, context: Context, config: AstrBotConfig = None):
+        super().__init__(context)
+        logger.info("TradingAssistantPlugin 初始化中...")
+        self.config = config or {}
+        
+        # 从插件配置读取API配置
+        self.api_key = None
+        self.api_base = None
+        self.model = None
+        self.reasoning = None
+        self.llm = None
+        
+        # 初始化LLM配置
+        self._init_llm_config()
+    
+    def _init_llm_config(self):
+        """初始化LLM配置"""
+        try:
+            import os
+
+            self.api_key = self.config.get('api_key') or os.environ.get('TRADING_ASSISTANT_API_KEY', '')
+            self.api_base = self.config.get('api_base') or os.environ.get('TRADING_ASSISTANT_API_BASE', 'https://open.bigmodel.cn/api/paas/v4')
+            self.model = self.config.get('model') or os.environ.get('TRADING_ASSISTANT_MODEL', 'glm-4-flash')
+            self.reasoning = self.config.get('reasoning')
+            
+            if self.api_key:
+                logger.info(f"LLM配置已加载，模型: {self.model}")
+                self.llm = OpenAICompatibleLLM(
+                    api_key=self.api_key,
+                    api_base=self.api_base,
+                    model=self.model
+                )
+            else:
+                logger.warning("未配置 LLM API Key，部分功能可能不可用")
+        except Exception as e:
+            logger.error(f"初始化LLM配置失败: {e}")
+    
+    async def _get_llm(self) -> OpenAICompatibleLLM:
+        """获取或创建LLM实例"""
+        if self.llm is None:
+            self._init_llm_config()
+        
+        if self.llm is None:
+            raise ValueError("LLM未配置，请在插件配置中填写 api_key 或设置对应环境变量")
+        
+        return self.llm
+
+    @staticmethod
+    def _extract_command_arg(message_str: str, command_names: list[str]) -> str:
+        cleaned = message_str.strip()
+        for command_name in command_names:
+            prefixed = f'/{command_name}'
+            if cleaned.startswith(prefixed):
+                return cleaned[len(prefixed):].strip()
+        return cleaned
+
+    async def _resolve_ticker_via_llm(self, raw_input: str) -> str | None:
+        """
+        当用户输入不是有效股票代码格式时，调用 LLM 将其解析为股票代码。
+
+        LLM 会根据名称/描述返回对应的标准股票代码：
+        - A股: 6位纯数字 (如 000905)
+        - 港股: 数字.HK (如 0700.HK)
+        - 美股: 大写字母 (如 AAPL)
+
+        Args:
+            raw_input: 用户原始输入（如"厦门港务"、"苹果"）
+
+        Returns:
+            解析出的标准股票代码；解析失败时返回 None
+        """
+        llm = await self._get_llm()
+
+        prompt = (
+            "你是一个股票代码查询助手。用户会输入一个股票名称或关键词，"
+            "你需要返回对应的**标准股票代码**。\n\n"
+            "返回格式要求：\n"
+            "- A股返回6位纯数字代码，例如：平安银行→000001，厦门港务→000905\n"
+            "- 港股返回数字.HK格式，例如：腾讯控股→0700.HK，美团→3690.HK\n"
+            "- 美股返回大写字母代码，例如：苹果→AAPL，特斯拉→TSLA\n\n"
+            "重要规则：\n"
+            "1. 只返回一个最匹配的股票代码，不要有任何多余文字、解释或标点\n"
+            "2. 如果输入同时有A股和其他市场，优先返回A股代码\n"
+            "3. 如果输入不是股票名称（例如是普通词语、指令等），直接回复 UNKNOWN\n"
+            "4. 如果完全无法识别对应的股票，直接回复 UNKNOWN\n\n"
+            f"用户输入：{raw_input}"
+        )
+
+        try:
+            result = await llm.ask(prompt)
+            result = result.strip().strip('`').strip()
+
+            if result.upper() == 'UNKNOWN' or not result:
+                logger.warning(f"LLM无法解析股票名称 '{raw_input}' → 无法识别")
+                return None
+
+            logger.info(f"LLM解析股票名称: '{raw_input}' → '{result}'")
+            return result
+        except Exception as e:
+            logger.error(f"LLM解析股票名称失败: {e}")
+            return None
+
+    @staticmethod
+    def _needs_ticker_resolution(ticker: str) -> bool:
+        """判断用户输入是否需要 LLM 解析（即不是有效的股票代码格式）"""
+        from .utils.stock_utils import StockUtils
+        return not StockUtils.is_valid_stock_code(ticker)
+
+    async def _run_stock_analysis(self, ticker: str, event: AstrMessageEvent = None) -> str:
+        """执行股票分析，支持实时进度推送"""
+        llm = await self._get_llm()
+        data_fetcher = DataFetcher()
+
+        # 定义进度回调函数
+        async def progress_callback(stage: str, detail: str):
+            logger.info(f"[进度] {stage}: {detail}")
+            if event:
+                try:
+                    await event.send(event.plain_result(detail))
+                except Exception as e:
+                    logger.warning(f"发送进度消息失败: {e}")
+
+        graph = FinancialAssistantGraph(llm, data_fetcher, progress_callback=progress_callback)
+
+        logger.info(f"开始分析股票: {ticker}")
+        report = await graph.analyze(ticker)
+        
+        # 检查是否为数据不完整的错误报告
+        if report.startswith("❌"):
+            logger.warning(f"分析因数据不完整而终止: {ticker}")
+        
+        return report
+    
+    @filter.command("股票分析")
+    async def analyze_stock(self, event: AstrMessageEvent) -> MessageEventResult:
+        """
+        股票分析命令
+        用法: /股票分析 <股票代码或名称>
+        例如: /股票分析 000001 或 /股票分析 平安银行
+        """
+        message_str = self._extract_command_arg(event.message_str, ["股票分析", "股票"])
+        
+        if not message_str:
+            yield event.plain_result("请提供股票代码或名称，例如：/股票分析 000001")
+            return
+        
+        ticker = message_str
+        
+        try:
+            # 如果输入不是有效的股票代码格式（如中文股票名称），通过 LLM 解析为代码
+            if self._needs_ticker_resolution(ticker):
+                resolved = await self._resolve_ticker_via_llm(ticker)
+                if resolved is None:
+                    yield event.plain_result(
+                        f"❌ 无法识别「{ticker}」对应的股票。\n"
+                        "请输入有效的股票代码或名称，例如：\n"
+                        "- A股：000001 或 平安银行\n"
+                        "- 港股：0700.HK 或 腾讯控股\n"
+                        "- 美股：AAPL 或 苹果"
+                    )
+                    return
+                if event:
+                    await event.send(event.plain_result(f"🔍 已识别「{ticker}」→ {resolved}"))
+                ticker = resolved
+
+            report = await self._run_stock_analysis(ticker, event)
+            yield event.plain_result(report)
+            
+        except ValueError as e:
+            yield event.plain_result(f"配置错误: {str(e)}")
+        except Exception as e:
+            logger.error(f"股票分析失败: {e}", exc_info=True)
+            yield event.plain_result(f"分析失败: {str(e)}")
+    
+    @filter.command("股票")
+    async def stock_command(self, event: AstrMessageEvent) -> MessageEventResult:
+        """
+        股票查询命令（快捷命令）
+        用法: /股票 <代码或名称>
+        """
+        async for result in self.analyze_stock(event):
+            yield result
+    
+    @filter.command("年报")
+    async def stock_report(self, event: AstrMessageEvent) -> MessageEventResult:
+        """
+        股票报告命令
+        用法: /年报 <股票代码>
+        """
+        async for result in self.analyze_stock(event):
+            yield result
+    
+    @filter.command("查股")
+    async def lookup_stock(self, event: AstrMessageEvent) -> MessageEventResult:
+        """
+        股票信息查询
+        用法: /查股 <代码>
+        """
+        message_str = self._extract_command_arg(event.message_str, ["查股"])
+        
+        if not message_str:
+            yield event.plain_result("请提供股票代码，例如：/查股 000001")
+            return
+        
+        ticker = message_str
+        
+        try:
+            # 如果输入不是有效的股票代码格式，通过 LLM 解析
+            if self._needs_ticker_resolution(ticker):
+                resolved = await self._resolve_ticker_via_llm(ticker)
+                if resolved is None:
+                    yield event.plain_result(
+                        f"❌ 无法识别「{ticker}」对应的股票。\n"
+                        "请输入有效的股票代码或名称，例如：/查股 000001"
+                    )
+                    return
+                if event:
+                    await event.send(event.plain_result(f"🔍 已识别「{ticker}」→ {resolved}"))
+                ticker = resolved
+
+            # 获取市场信息
+            market_info = StockUtils.get_market_info(ticker)
+
+            # 检查是否解析失败（无法识别的市场）
+            if market_info.get('resolution_failed'):
+                yield event.plain_result(f"❌ {market_info['resolution_message']}")
+                return
+
+            normalized = market_info['normalized_ticker']
+            stock_name = StockUtils.get_stock_name(ticker)
+            
+            # 格式化输出
+            info_text = f"""**股票信息**
+
+股票名称: {stock_name}
+股票代码: {normalized}
+所属市场: {market_info['market_name']}
+交易所: {market_info['exchange']}
+计价货币: {market_info['currency_name']}（{market_info['currency_symbol']}）
+"""
+            
+            yield event.plain_result(info_text)
+            
+        except Exception as e:
+            logger.error(f"股票查询失败: {e}")
+            yield event.plain_result(f"查询失败: {str(e)}")
+    
+    @filter.command("帮助")
+    async def show_help(self, event: AstrMessageEvent) -> MessageEventResult:
+        """
+        显示帮助信息
+        """
+        help_text = """**TradingAgents 金融助手 使用帮助**
+
+支持以下命令：
+
+1. **股票分析** - 生成完整的股票分析报告
+   命令: /股票分析 <股票代码或名称>
+   示例: /股票分析 000001
+         /股票分析 平安银行
+         /股票分析 AAPL
+
+2. **快捷分析** - 快速股票查询
+   命令: /股票 <代码或名称>
+   示例: /股票 000001
+
+3. **股票信息** - 查询股票基本信息
+   命令: /查股 <代码>
+   示例: /查股 000001
+
+4. **市场支持**:
+   - A股 (如: 000001, 600000, 平安银行)
+   - 港股 (如: 0700.HK, 腾讯)
+   - 美股 (如: AAPL, TSLA, NVDA)
+
+**注意事项**:
+- 首次使用可能需要配置API Key
+- 分析结果仅供参考，不构成投资建议
+"""
+        yield event.plain_result(help_text)
+    
+    async def terminate(self):
+        """插件卸载时调用"""
+        logger.info("TradingAssistantPlugin 卸载中...")
