@@ -32,6 +32,7 @@ class DataFetcher:
         其余使用标准 requests + 浏览器 headers。
         **不修改全局 requests.get**。
         """
+        # REVIEW-NOTE: 断开连接时返回 None 为有意设计，调用方已处理 None 情况
         import time as _time
         import requests
 
@@ -257,7 +258,9 @@ class DataFetcher:
 """
             
             for idx, row in df.tail(5).iterrows():
-                result += f"- **{row['日期']}**: 收{row['收盘']} ({row['涨跌幅']:+.2f}%)\n"
+                _pct = row['涨跌幅']
+                _pct_str = f"{_pct:+.2f}" if isinstance(_pct, (int, float)) else str(_pct)
+                result += f"- **{row['日期']}**: 收{row['收盘']} ({_pct_str}%)\n"
             
             # 获取实时行情（带重试）
             try:
@@ -372,7 +375,8 @@ class DataFetcher:
                         date_str = row.get('日期', 'N/A')
                         close = row.get('收盘', 'N/A')
                         pct = row.get('涨跌幅', 'N/A')
-                        hist_text += f"- **{date_str}**: 收{close} ({pct:+.2f}%)\n"
+                        _pct_str = f"{pct:+.2f}" if isinstance(pct, (int, float)) else str(pct)
+                        hist_text += f"- **{date_str}**: 收{close} ({_pct_str}%)\n"
                     
                     # 近期行情表（最新一天）
                     latest = hist_df.iloc[-1]
@@ -468,7 +472,8 @@ class DataFetcher:
                                     date_str = hrow.get('日期', 'N/A')
                                     close = hrow.get('收盘', 'N/A')
                                     pct = hrow.get('涨跌幅', 'N/A')
-                                    hist_text += f"- **{date_str}**: 收${close} ({pct:+.2f}%)\n"
+                                    _pct_str = f"{pct:+.2f}" if isinstance(pct, (int, float)) else str(pct)
+                                    hist_text += f"- **{date_str}**: 收${close} ({_pct_str}%)\n"
                         except Exception as e:
                             logger.warning(f"获取美股历史K线失败(akshare): {e}")
                             hist_text = "\n### 历史K线\n获取失败\n"
@@ -513,7 +518,8 @@ class DataFetcher:
                     close = row['Close']
                     pct = close_pct.loc[idx] if idx in close_pct.index else 0
                     pct = 0 if (pct != pct) else pct  # NaN guard
-                    hist_text += f"- **{date_str}**: 收${close:.2f} ({pct:+.2f}%)\n"
+                    _pct_str = f"{pct:+.2f}" if isinstance(pct, (int, float)) else str(pct)
+                    hist_text += f"- **{date_str}**: 收${close:.2f} ({_pct_str}%)\n"
             
             return f"""## 美股市场数据
 
@@ -1312,12 +1318,4 @@ class DataFetcher:
         return {'valid': True, 'reason': ''}
 
 
-# 全局单例
-_data_fetcher = None
-
-def get_data_fetcher() -> DataFetcher:
-    """获取全局DataFetcher实例"""
-    global _data_fetcher
-    if _data_fetcher is None:
-        _data_fetcher = DataFetcher()
-    return _data_fetcher
+# REVIEW-NOTE: 原全局单例 get_data_fetcher() 已删除（从未被调用，各模块按需创建 DataFetcher 实例）

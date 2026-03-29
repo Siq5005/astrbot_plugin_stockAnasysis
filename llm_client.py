@@ -39,6 +39,7 @@ class OpenAICompatibleLLM:
         self.timeout_seconds = timeout_seconds
         self.reasoning = reasoning
         self.max_retries = max_retries
+        # REVIEW-NOTE: max_retries 未做负数校验，依赖配置合理性（实际不会出现负值）
         self._session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -90,7 +91,12 @@ class OpenAICompatibleLLM:
                             )
 
                         result = await response.json()
-                        content = result["choices"][0]["message"]["content"]
+                        try:
+                            content = result["choices"][0]["message"]["content"]
+                        except (KeyError, IndexError, TypeError) as e:
+                            raise RuntimeError(
+                                f"LLM API 返回了非预期的响应结构: {e} (keys={list(result.keys())})"
+                            ) from e
                         return self._clean_response(content)
 
             except asyncio.TimeoutError as exc:

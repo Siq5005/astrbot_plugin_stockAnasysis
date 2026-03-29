@@ -247,7 +247,12 @@ class TradingGraphLangGraph:
     async def _bull_researcher_node(self, state: AgentState) -> Dict:
         """多方研究员节点"""
         logger.info(f"执行多方研究员: {state.ticker}")
-        
+
+        # 通用错误短路：上游发生致命错误时跳过本节点
+        if state.error:
+            logger.warning("跳过多方研究员：上游错误")
+            return {"bull_research": "⚠️ 因上游数据缺失，跳过多方研究"}
+
         context = {
             'market_analysis': state.market_analysis,
             'fundamentals_analysis': state.fundamentals_analysis,
@@ -266,7 +271,12 @@ class TradingGraphLangGraph:
     async def _bear_researcher_node(self, state: AgentState) -> Dict:
         """空方研究员节点"""
         logger.info(f"执行空方研究员: {state.ticker}")
-        
+
+        # 通用错误短路：上游发生致命错误时跳过本节点
+        if state.error:
+            logger.warning("跳过空方研究员：上游错误")
+            return {"bear_research": "⚠️ 因上游数据缺失，跳过空方研究"}
+
         context = {
             'market_analysis': state.market_analysis,
             'fundamentals_analysis': state.fundamentals_analysis,

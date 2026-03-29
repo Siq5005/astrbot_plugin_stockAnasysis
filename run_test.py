@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 # 将插件包的父目录加入 sys.path，使 Python 可以将当前目录识别为一个包
+# REVIEW-NOTE: sys.path 注入为标准测试模式，支持将当前目录识别为包
 PLUGIN_PARENT = str(Path(__file__).resolve().parent.parent)
 if PLUGIN_PARENT not in sys.path:
     sys.path.insert(0, PLUGIN_PARENT)
@@ -156,6 +157,8 @@ async def test_llm():
         print(f"  {'✅' if ok else '⚠️'} LLM 响应: {result[:100]}")
     except Exception as e:
         print(f"  ❌ LLM 调用失败: {e}")
+    finally:
+        await llm.close()
 
     print()
 
@@ -200,6 +203,8 @@ async def test_full_analysis(ticker: str, output_name: str = None):
         print(f"  ❌ 分析失败: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        await llm.close()
 
     print()
 

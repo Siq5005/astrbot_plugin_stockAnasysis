@@ -99,7 +99,7 @@ class NewsAnalyst(BaseAnalyst):
     def _get_extra_context(self, stock_name: str, ticker: str, market_info: Dict) -> str:
         """获取额外上下文"""
         return f"""## 分析要求
-请重点关注以下新闻面分析要点：
+请重点关注 {stock_name}（{ticker}）的新闻面分析要点：
 
 1. **时效性评估**：新闻发布时间距现在多久
 2. **影响力评估**：新闻对股价的潜在影响程度

@@ -1,6 +1,7 @@
 """
 研究主管 - 负责协调多方和空方研究，生成综合辩论报告
 """
+import asyncio
 from typing import Dict
 
 from astrbot.api import logger
@@ -29,14 +30,19 @@ class ResearchManager:
         """
         logger.info(f"研究主管开始协调辩论: {ticker}")
         
-        # 并行执行多方和空方研究
+        # 并行执行多方和空方研究（带超时保护）
         bull_task = self.bull_researcher.research(ticker, trade_date, context)
         bear_task = self.bear_researcher.research(ticker, trade_date, context)
         
-        bull_report, bear_report = await self._run_parallel(bull_task, bear_task)
+        try:
+            bull_report, bear_report = await asyncio.wait_for(
+                self._run_parallel(bull_task, bear_task), timeout=180
+            )
+        except asyncio.TimeoutError:
+            logger.error("多空辩论并行研究超时（180s）")
+            return "⚠️ 多空辩论并行研究超时，请稍后重试。"
 
         # 处理并行执行中的异常
-        import asyncio
         if isinstance(bull_report, Exception):
             logger.error(f"多方研究异常: {bull_report}")
             bull_report = f"多方研究失败: {type(bull_report).__name__}: {bull_report}"
@@ -55,7 +61,6 @@ class ResearchManager:
     
     async def _run_parallel(self, *tasks):
         """并行运行多个任务"""
-        import asyncio
         results = await asyncio.gather(*tasks, return_exceptions=True)
         return results
     
@@ -66,7 +71,6 @@ class ResearchManager:
         from ..utils.stock_utils import StockUtils
         
         market_info = StockUtils.get_market_info(ticker)
-        normalized_ticker = market_info['normalized_ticker']
         stock_name = StockUtils.get_stock_name(ticker)
         
         prompt = f"""你是一位资深的研究主管，负责综合多方和空方的研究报告，生成客观的辩论综合报告。
@@ -127,7 +131,6 @@ class ResearchManager:
 - 给出基于辩论的综合投资建议
 """
         
-        import asyncio
         try:
             response = await asyncio.wait_for(
                 self.llm.ask(prompt),

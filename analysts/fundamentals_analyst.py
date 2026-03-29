@@ -100,7 +100,7 @@ class FundamentalsAnalyst(BaseAnalyst):
     def _get_extra_context(self, stock_name: str, ticker: str, market_info: Dict) -> str:
         """获取额外上下文"""
         return f"""## 分析要求
-请重点关注以下基本面分析要点：
+请重点关注 {stock_name}（{ticker}）的基本面分析要点：
 
 1. **估值水平**：PE、PB是否处于历史低位/高位
 2. **盈利能力**：ROE、毛利率、净利率是否稳定

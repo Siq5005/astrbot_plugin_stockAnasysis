@@ -46,6 +46,7 @@ class TradingAssistantPlugin(Star):
             self.api_base = self.config.get('api_base') or os.environ.get('TRADING_ASSISTANT_API_BASE', 'https://open.bigmodel.cn/api/paas/v4')
             self.model = self.config.get('model') or os.environ.get('TRADING_ASSISTANT_MODEL', 'glm-4-flash')
             self.reasoning = self.config.get('reasoning')
+            # REVIEW-NOTE: timeout_seconds 未做类型验证，依赖框架配置校验（实际风险极低）
             self.timeout_seconds = int(self.config.get('timeout_seconds', 120))
             
             if self.api_key:

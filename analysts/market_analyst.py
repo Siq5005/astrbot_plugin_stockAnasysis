@@ -99,7 +99,7 @@ class MarketAnalyst(BaseAnalyst):
     def _get_extra_context(self, stock_name: str, ticker: str, market_info: Dict) -> str:
         """获取额外上下文"""
         return f"""## 分析要求
-请重点关注以下技术面分析要点：
+请重点关注 {stock_name}（{ticker}）的技术面分析要点：
 
 1. **价格走势**：判断当前趋势（上升/下降/盘整）
 2. **成交量配合**：分析成交量与价格走势的关系

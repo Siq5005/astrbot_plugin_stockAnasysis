@@ -50,13 +50,9 @@ class BaseAnalyst(ABC):
         return market_info, normalized_ticker, stock_name
     
     async def _call_llm(self, prompt: str) -> str:
-        """调用LLM生成回复"""
-        try:
-            result = await self.llm(prompt)
-            return result
-        except Exception as e:
-            logger.error(f"LLM调用失败: {e}")
-            return f"LLM调用失败: {str(e)}"
+        """调用LLM生成回复，异常向上传播由调用方处理。"""
+        result = await self.llm(prompt)
+        return result
     
     def _get_system_prompt(self) -> str:
         """获取系统提示词 - 子类可重写"""
