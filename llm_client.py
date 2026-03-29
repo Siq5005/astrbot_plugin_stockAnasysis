@@ -90,7 +90,22 @@ class OpenAICompatibleLLM:
                                 f"LLM API错误 ({response.status}): {error_text[:300]}"
                             )
 
-                        result = await response.json()
+                        try:
+                            result = await response.json()
+                        except Exception as json_err:
+                            # HTTP 200 但响应体非合法 JSON（网关错误页等），触发重试
+                            error_text = await response.text()
+                            logger.warning(
+                                "LLM API 返回 200 但 JSON 解码失败: %s (body=%s)",
+                                type(json_err).__name__, error_text[:200],
+                            )
+                            if attempt < self.max_retries:
+                                await asyncio.sleep(2 ** attempt)
+                                continue
+                            raise RuntimeError(
+                                f"LLM API JSON 解码失败: {type(json_err).__name__}: {json_err}"
+                            ) from json_err
+
                         try:
                             content = result["choices"][0]["message"]["content"]
                         except (KeyError, IndexError, TypeError) as e:

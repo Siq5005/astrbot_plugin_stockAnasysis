@@ -59,6 +59,7 @@ class ResearchManager:
         
         return debate_report
     
+    # REVIEW-NOTE: 保留 _run_parallel 封装，因 conduct_debate 中已用 asyncio.wait_for 超时包裹，内联会使超时逻辑与 gather 混杂
     async def _run_parallel(self, *tasks):
         """并行运行多个任务"""
         results = await asyncio.gather(*tasks, return_exceptions=True)

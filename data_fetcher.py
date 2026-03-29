@@ -26,58 +26,6 @@ class DataFetcher:
             timeout=timeout,
         )
 
-    def _safe_get(self, url, **kwargs):
-        """
-        安全 HTTP GET：对东方财富 URL 优先使用 curl_cffi（模拟浏览器 TLS 指纹），
-        其余使用标准 requests + 浏览器 headers。
-        **不修改全局 requests.get**。
-        """
-        # REVIEW-NOTE: 断开连接时返回 None 为有意设计，调用方已处理 None 情况
-        import time as _time
-        import requests
-
-        # 东方财富请求节流
-        if 'eastmoney.com' in url:
-            current_time = _time.time()
-            time_since_last = current_time - self._last_request_time
-            if time_since_last < 0.5:
-                _time.sleep(0.5 - time_since_last)
-            self._last_request_time = _time.time()
-
-        # 东方财富 + curl_cffi 可用 → 模拟真实浏览器 TLS 指纹
-        if self._use_curl_cffi and self._curl_requests and 'eastmoney.com' in url:
-            try:
-                curl_kwargs = {
-                    'timeout': kwargs.get('timeout', 10),
-                    'impersonate': "chrome120"
-                }
-                for k in ('params', 'data', 'json'):
-                    if k in kwargs:
-                        curl_kwargs[k] = kwargs[k]
-                return self._curl_requests.get(url, **curl_kwargs)
-            except Exception as e:
-                error_msg = str(e)
-                if 'invalid library' not in error_msg and '400' not in error_msg:
-                    logger.warning(f"⚠️ curl_cffi 请求失败，回退到标准 requests: {e}")
-
-        # 标准 requests 请求：补充浏览器 headers
-        if 'headers' not in kwargs or kwargs['headers'] is None:
-            kwargs['headers'] = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Referer': 'https://www.eastmoney.com/',
-                'Connection': 'keep-alive',
-            }
-        elif isinstance(kwargs['headers'], dict):
-            kwargs['headers'].setdefault('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-            kwargs['headers'].setdefault('Referer', 'https://www.eastmoney.com/')
-            kwargs['headers'].setdefault('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8')
-            kwargs['headers'].setdefault('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8')
-
-        return requests.get(url, **kwargs)
-
     async def _run_akshare(self, func, *args, timeout: int = 30, **kwargs):
         """在线程池中执行 akshare 调用（不修改全局 requests.get）。"""
         return await self._run_blocking(func, *args, timeout=timeout, **kwargs)
@@ -85,7 +33,7 @@ class DataFetcher:
     def _initialize_akshare(self):
         """
         初始化 AKShare 连接 - 使用 curl_cffi 绕过反爬虫（方案 B）。
-        不再 patch 全局 requests.get，而是提供 _safe_get() 供内部使用。
+        不再 patch 全局 requests.get，使用 curl_cffi 替代同步 _safe_get（已移除）。
         """
         if self._initialized:
             return

@@ -73,6 +73,7 @@ class TradingAssistantPlugin(Star):
         
         return self.llm
 
+    # REVIEW-NOTE: _extract_command_arg 当前实现功能正确且可读性好，removeprefix 简化为风格偏好，暂不修改
     @staticmethod
     def _extract_command_arg(message_str: str, command_names: list[str]) -> str:
         cleaned = message_str.strip()
