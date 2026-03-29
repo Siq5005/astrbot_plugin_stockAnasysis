@@ -1,10 +1,9 @@
 """
 空方研究员 - 负责挖掘股票的利空因素
 """
-import logging
 from typing import Dict, List
 
-logger = logging.getLogger("debate.bear")
+from astrbot.api import logger
 
 
 class BearResearcher:

@@ -1,11 +1,12 @@
 """基于 LangGraph 的多智能体金融分析图。"""
 
-import logging
 from datetime import datetime
 from typing import Callable, Dict, Any, Optional
 from dataclasses import dataclass, field
 
 from langgraph.graph import END, StateGraph, START
+
+from astrbot.api import logger
 
 from .data_fetcher import DataFetcher
 from .analysts.market_analyst import MarketAnalyst
@@ -16,8 +17,6 @@ from .debate.bear_researcher import BearResearcher
 from .debate.research_manager import ResearchManager
 from .debate.risk_judge import RiskJudge
 from .utils.stock_utils import StockUtils
-
-logger = logging.getLogger("trading_graph")
 
 # 各分析阶段的进度消息
 STAGE_MESSAGES: Dict[str, str] = {
@@ -205,7 +204,7 @@ class TradingGraphLangGraph:
             )
             return {"market_analysis": analysis, "iteration": state.iteration + 1}
         except Exception as e:
-            logger.error(f"市场分析师错误: {e}")
+            logger.error(f"市场分析师错误: {type(e).__name__}: {repr(e)}", exc_info=True)
             return {"market_analysis": f"市场分析失败: {str(e)}", "error": str(e)}
     
     async def _fundamentals_analyst_node(self, state: AgentState) -> Dict:
@@ -223,7 +222,7 @@ class TradingGraphLangGraph:
             )
             return {"fundamentals_analysis": analysis}
         except Exception as e:
-            logger.error(f"基本面分析师错误: {e}")
+            logger.error(f"基本面分析师错误: {type(e).__name__}: {repr(e)}", exc_info=True)
             return {"fundamentals_analysis": f"基本面分析失败: {str(e)}", "error": str(e)}
     
     async def _news_analyst_node(self, state: AgentState) -> Dict:
@@ -242,7 +241,7 @@ class TradingGraphLangGraph:
             )
             return {"news_analysis": analysis}
         except Exception as e:
-            logger.error(f"新闻分析师错误: {e}")
+            logger.error(f"新闻分析师错误: {type(e).__name__}: {repr(e)}", exc_info=True)
             return {"news_analysis": f"新闻分析失败: {str(e)}", "error": str(e)}
     
     async def _bull_researcher_node(self, state: AgentState) -> Dict:
@@ -261,8 +260,8 @@ class TradingGraphLangGraph:
             )
             return {"bull_research": research}
         except Exception as e:
-            logger.error(f"多方研究员错误: {e}")
-            return {"bull_research": f"多方研究失败: {str(e)}", "error": str(e)}
+            logger.error(f"多方研究员错误: {type(e).__name__}: {repr(e)}", exc_info=True)
+            return {"bull_research": f"多方研究失败: {type(e).__name__}: {e}", "error": f"{type(e).__name__}: {e}"}
     
     async def _bear_researcher_node(self, state: AgentState) -> Dict:
         """空方研究员节点"""
@@ -280,8 +279,8 @@ class TradingGraphLangGraph:
             )
             return {"bear_research": research}
         except Exception as e:
-            logger.error(f"空方研究员错误: {e}")
-            return {"bear_research": f"空方研究失败: {str(e)}", "error": str(e)}
+            logger.error(f"空方研究员错误: {type(e).__name__}: {repr(e)}", exc_info=True)
+            return {"bear_research": f"空方研究失败: {type(e).__name__}: {e}", "error": f"{type(e).__name__}: {e}"}
     
     async def _research_manager_node(self, state: AgentState) -> Dict:
         """研究主管节点"""
@@ -299,8 +298,8 @@ class TradingGraphLangGraph:
             )
             return {"debate_report": debate_report}
         except Exception as e:
-            logger.error(f"研究主管错误: {e}")
-            return {"debate_report": f"辩论综合失败: {str(e)}", "error": str(e)}
+            logger.error(f"研究主管错误: {type(e).__name__}: {repr(e)}", exc_info=True)
+            return {"debate_report": f"辩论综合失败: {type(e).__name__}: {e}", "error": f"{type(e).__name__}: {e}"}
     
     async def _risk_judge_node(self, state: AgentState) -> Dict:
         """风险裁判节点"""
@@ -324,8 +323,8 @@ class TradingGraphLangGraph:
             )
             return {"risk_assessment": risk_assessment}
         except Exception as e:
-            logger.error(f"风险裁判错误: {e}")
-            return {"risk_assessment": f"风险评估失败: {str(e)}", "error": str(e)}
+            logger.error(f"风险裁判错误: {type(e).__name__}: {repr(e)}", exc_info=True)
+            return {"risk_assessment": f"风险评估失败: {type(e).__name__}: {e}", "error": f"{type(e).__name__}: {e}"}
     
     async def _report_generator_node(self, state: AgentState) -> Dict:
         """最终报告生成节点"""
@@ -451,8 +450,8 @@ class TradingGraphLangGraph:
             
             return final_state.final_report or '报告生成失败'
         except Exception as e:
-            logger.error(f"分析执行错误: {e}")
-            return f"分析执行失败: {str(e)}"
+            logger.error(f"分析执行错误: {type(e).__name__}: {repr(e)}", exc_info=True)
+            return f"分析执行失败: {type(e).__name__}: {e}"
 
 
 # 兼容性：保留原有的简化版类

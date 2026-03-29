@@ -1,10 +1,9 @@
 """统一数据获取模块。"""
 import asyncio
-import logging
 from datetime import datetime, timedelta
 from typing import Dict
 
-logger = logging.getLogger("data_fetcher")
+from astrbot.api import logger
 
 
 class DataFetcher:
@@ -23,6 +22,26 @@ class DataFetcher:
             asyncio.to_thread(func, *args, **kwargs),
             timeout=timeout,
         )
+
+    def _patch_requests(self):
+        """临时将 requests.get 替换为带补丁的版本，返回原始方法以便恢复。"""
+        if hasattr(self, '_patched_get'):
+            import requests
+            requests.get = self._patched_get
+
+    def _unpatch_requests(self):
+        """恢复 requests.get 为原始版本。"""
+        if hasattr(self, '_original_get'):
+            import requests
+            requests.get = self._original_get
+
+    async def _run_akshare(self, func, *args, timeout: int = 30, **kwargs):
+        """在线程池中执行 akshare 调用，仅在调用期间临时 patch requests.get。"""
+        self._patch_requests()
+        try:
+            return await self._run_blocking(func, *args, timeout=timeout, **kwargs)
+        finally:
+            self._unpatch_requests()
     
     def _initialize_akshare(self):
         """
@@ -39,81 +58,76 @@ class DataFetcher:
             # 尝试导入 curl_cffi，如果可用则使用它来绕过反爬虫
             try:
                 from curl_cffi import requests as curl_requests
-                use_curl_cffi = True
+                self._use_curl_cffi = True
                 logger.info("🔧 检测到 curl_cffi，将使用它来模拟真实浏览器 TLS 指纹")
             except ImportError:
-                use_curl_cffi = False
+                self._use_curl_cffi = False
+                curl_requests = None
                 logger.warning("⚠️ curl_cffi 未安装，将使用标准 requests（可能被反爬虫拦截）")
                 logger.warning("   建议安装: pip install curl-cffi")
 
-            # 修复AKShare的bug：设置requests的默认headers，并添加请求延迟
-            if not hasattr(requests, '_akshare_headers_patched'):
-                original_get = requests.get
-                last_request_time = {'time': 0}
+            # 构造带重试和指纹伪造的请求适配器，避免污染全局 requests
+            self._original_get = requests.get
+            self._last_request_time = 0
+            self._curl_requests = curl_requests
 
-                def patched_get(url, **kwargs):
-                    """
-                    包装requests.get方法，自动添加必要的headers和请求延迟
-                    如果可用，使用 curl_cffi 模拟真实浏览器 TLS 指纹
-                    """
-                    # 添加请求延迟，避免被反爬虫封禁
-                    if 'eastmoney.com' in url:
-                        current_time = time.time()
-                        time_since_last_request = current_time - last_request_time['time']
-                        if time_since_last_request < 0.5:
-                            time.sleep(0.5 - time_since_last_request)
-                        last_request_time['time'] = time.time()
+            def _patched_get(url, **kwargs):
+                """
+                包装 requests.get，自动添加必要 headers 和请求延迟。
+                如可用 curl_cffi，则模拟真实浏览器 TLS 指纹。
+                仅在 DataFetcher 内部使用，不污染全局命名空间。
+                """
+                import time as _time
 
-                    # 如果是东方财富网的请求，且 curl_cffi 可用，使用它来绕过反爬虫
-                    if use_curl_cffi and 'eastmoney.com' in url:
-                        try:
-                            curl_kwargs = {
-                                'timeout': kwargs.get('timeout', 10),
-                                'impersonate': "chrome120"
-                            }
-                            if 'params' in kwargs:
-                                curl_kwargs['params'] = kwargs['params']
-                            if 'data' in kwargs:
-                                curl_kwargs['data'] = kwargs['data']
-                            if 'json' in kwargs:
-                                curl_kwargs['json'] = kwargs['json']
+                # 添加请求延迟，避免被反爬虫封禁
+                if 'eastmoney.com' in url:
+                    current_time = _time.time()
+                    time_since_last = current_time - self._last_request_time
+                    if time_since_last < 0.5:
+                        _time.sleep(0.5 - time_since_last)
+                    self._last_request_time = _time.time()
 
-                            response = curl_requests.get(url, **curl_kwargs)
-                            return response
-                        except Exception as e:
-                            error_msg = str(e)
-                            if 'invalid library' not in error_msg and '400' not in error_msg:
-                                logger.warning(f"⚠️ curl_cffi 请求失败，回退到标准 requests: {e}")
-
-                    # 标准 requests 请求
-                    if 'headers' not in kwargs or kwargs['headers'] is None:
-                        kwargs['headers'] = {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                            'Accept-Encoding': 'gzip, deflate, br',
-                            'Referer': 'https://www.eastmoney.com/',
-                            'Connection': 'keep-alive',
+                # 如果是东方财富网的请求，且 curl_cffi 可用
+                if self._use_curl_cffi and self._curl_requests and 'eastmoney.com' in url:
+                    try:
+                        curl_kwargs = {
+                            'timeout': kwargs.get('timeout', 10),
+                            'impersonate': "chrome120"
                         }
-                    elif isinstance(kwargs['headers'], dict):
-                        if 'User-Agent' not in kwargs['headers']:
-                            kwargs['headers']['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                        if 'Referer' not in kwargs['headers']:
-                            kwargs['headers']['Referer'] = 'https://www.eastmoney.com/'
-                        if 'Accept' not in kwargs['headers']:
-                            kwargs['headers']['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
-                        if 'Accept-Language' not in kwargs['headers']:
-                            kwargs['headers']['Accept-Language'] = 'zh-CN,zh;q=0.9,en;q=0.8'
+                        for k in ('params', 'data', 'json'):
+                            if k in kwargs:
+                                curl_kwargs[k] = kwargs[k]
 
-                    return original_get(url, **kwargs)
+                        return self._curl_requests.get(url, **curl_kwargs)
+                    except Exception as e:
+                        error_msg = str(e)
+                        if 'invalid library' not in error_msg and '400' not in error_msg:
+                            logger.warning(f"⚠️ curl_cffi 请求失败，回退到标准 requests: {e}")
 
-                requests.get = patched_get
-                requests._akshare_headers_patched = True
+                # 标准 requests 请求：补充浏览器 headers
+                if 'headers' not in kwargs or kwargs['headers'] is None:
+                    kwargs['headers'] = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Referer': 'https://www.eastmoney.com/',
+                        'Connection': 'keep-alive',
+                    }
+                elif isinstance(kwargs['headers'], dict):
+                    kwargs['headers'].setdefault('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+                    kwargs['headers'].setdefault('Referer', 'https://www.eastmoney.com/')
+                    kwargs['headers'].setdefault('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8')
+                    kwargs['headers'].setdefault('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8')
 
-                if use_curl_cffi:
-                    logger.info("🔧 已修复AKShare的headers问题，使用 curl_cffi 模拟真实浏览器（Chrome 120）")
-                else:
-                    logger.info("🔧 已修复AKShare的headers问题，并添加请求延迟（0.5秒）")
+                return self._original_get(url, **kwargs)
+
+            self._patched_get = _patched_get
+
+            if self._use_curl_cffi:
+                logger.info("🔧 AKShare 已配置 curl_cffi 模拟真实浏览器（Chrome 120）")
+            else:
+                logger.info("🔧 AKShare 已配置请求延迟和 headers 补丁（0.5秒）")
 
             self._initialized = True
             logger.info("✅ AKShare 初始化完成")
@@ -198,7 +212,7 @@ class DataFetcher:
                 try:
                     logger.info(f"尝试获取A股数据 (尝试 {attempt + 1}/3): {code}")
                     # 使用 to_thread 在线程池中执行同步代码，避免阻塞事件循环
-                    df = await self._run_blocking(
+                    df = await self._run_akshare(
                         ak.stock_zh_a_hist,
                         symbol=code,
                         period="daily",
@@ -269,7 +283,7 @@ class DataFetcher:
             
             # 获取实时行情（带重试）
             try:
-                spot_df = await self._run_blocking(ak.stock_zh_a_spot_em, timeout=15)
+                spot_df = await self._run_akshare(ak.stock_zh_a_spot_em, timeout=15)
                 spot_result = spot_df[spot_df['代码'] == code]
                 if not spot_result.empty:
                     s = spot_result.iloc[0]
@@ -292,7 +306,7 @@ class DataFetcher:
 | 流通市值 | {s.get('流通市值', 'N/A')} |
 """
             except Exception as e:
-                logger.warning(f"获取实时行情失败: {e}")
+                logger.warning(f"获取实时行情失败: {type(e).__name__}: {repr(e)}")
             
             return result
             
@@ -326,7 +340,7 @@ class DataFetcher:
             # === 1. 获取实时行情 ===
             realtime_text = ""
             try:
-                spot_df = await self._run_blocking(ak.stock_hk_spot_em, timeout=30)
+                spot_df = await self._run_akshare(ak.stock_hk_spot_em, timeout=30)
                 spot_result = spot_df[spot_df['代码'] == code]
                 
                 if spot_result is None or spot_result.empty:
@@ -363,7 +377,7 @@ class DataFetcher:
                 end_date = datetime.strptime(trade_date, '%Y-%m-%d')
                 start_date = end_date - timedelta(days=60)  # 多取一些确保有足够交易日
                 
-                hist_df = await self._run_blocking(
+                hist_df = await self._run_akshare(
                     ak.stock_hk_hist,
                     symbol=padded_code,
                     period="daily",
@@ -428,7 +442,7 @@ class DataFetcher:
                 import pandas as pd
                 
                 # 获取实时行情
-                spot_df = await self._run_blocking(ak.stock_us_spot_em, timeout=30)
+                spot_df = await self._run_akshare(ak.stock_us_spot_em, timeout=30)
                 
                 if spot_df is not None and not spot_df.empty:
                     # 匹配美股代码（akshare格式: "105.AAPL"）
@@ -460,7 +474,7 @@ class DataFetcher:
                             end_date = datetime.strptime(trade_date, '%Y-%m-%d')
                             start_date = end_date - timedelta(days=60)
                             
-                            hist_df = await self._run_blocking(
+                            hist_df = await self._run_akshare(
                                 ak.stock_us_hist,
                                 symbol=ak_code,
                                 period="daily",
@@ -587,7 +601,7 @@ class DataFetcher:
             try:
                 # 使用 asyncio.to_thread 在线程池中执行同步API
                 # 获取主要财务指标 - stock_financial_abstract 包含所有关键指标
-                main_indicators = await self._run_blocking(
+                main_indicators = await self._run_akshare(
                     ak.stock_financial_abstract,
                     symbol=code,
                     timeout=30,
@@ -678,7 +692,7 @@ class DataFetcher:
             try:
                 import akshare as ak
                 
-                info_df = await self._run_blocking(
+                info_df = await self._run_akshare(
                     ak.stock_individual_basic_info_hk_xq,
                     symbol=padded_code,
                     timeout=30,
@@ -812,7 +826,7 @@ class DataFetcher:
         if self.akshare_available:
             try:
                 import akshare as ak
-                info_df = await self._run_blocking(
+                info_df = await self._run_akshare(
                     ak.stock_individual_basic_info_us_xq,
                     symbol=ticker,
                     timeout=30,
@@ -927,7 +941,7 @@ class DataFetcher:
             code = StockUtils.strip_market_prefix(ticker)
             
             try:
-                news_df = await self._run_blocking(ak.stock_news_em, symbol=code, timeout=30)
+                news_df = await self._run_akshare(ak.stock_news_em, symbol=code, timeout=30)
                 
                 if news_df is not None and not news_df.empty:
                     news_text = f"## A股新闻数据\n\n**股票代码**: {code}\n**日期**: {trade_date}\n\n### 近期新闻\n"
@@ -1058,7 +1072,7 @@ class DataFetcher:
             
             try:
                 # 资金流向数据可作为情绪参考
-                df = await self._run_blocking(
+                df = await self._run_akshare(
                     ak.stock_individual_fund_flow,
                     stock=code,
                     market="sh" if code.startswith(('600', '601', '603', '688')) else "sz",

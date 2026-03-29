@@ -1,10 +1,9 @@
 """
 多方研究员 - 负责挖掘股票的利好因素
 """
-import logging
 from typing import Dict, List
 
-logger = logging.getLogger("debate.bull")
+from astrbot.api import logger
 
 
 class BullResearcher:

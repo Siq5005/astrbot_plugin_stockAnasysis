@@ -1,11 +1,10 @@
 """分析师基类。"""
 from abc import ABC, abstractmethod
 from typing import Dict, Tuple
-import logging
+
+from astrbot.api import logger
 
 from ..utils.stock_utils import StockUtils
-
-logger = logging.getLogger("analyst.base")
 
 
 class BaseAnalyst(ABC):

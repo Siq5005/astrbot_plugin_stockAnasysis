@@ -1,12 +1,11 @@
 """
 市场分析师 - 负责技术面分析
 """
-import logging
 from typing import Dict
 
-from .base import BaseAnalyst
+from astrbot.api import logger
 
-logger = logging.getLogger("analyst.market")
+from .base import BaseAnalyst
 
 
 class MarketAnalyst(BaseAnalyst):

@@ -1,12 +1,11 @@
 """
 基本面分析师 - 负责基本面分析
 """
-import logging
 from typing import Dict
 
-from .base import BaseAnalyst
+from astrbot.api import logger
 
-logger = logging.getLogger("analyst.fundamentals")
+from .base import BaseAnalyst
 
 
 class FundamentalsAnalyst(BaseAnalyst):

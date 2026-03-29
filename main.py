@@ -1,5 +1,7 @@
 """AstrBot 金融助手插件入口。"""
 
+import os
+
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.star import Context, Star
@@ -8,6 +10,7 @@ from .trading_graph_langgraph import TradingGraphLangGraph as FinancialAssistant
 from .data_fetcher import DataFetcher
 from .llm_client import OpenAICompatibleLLM
 from .utils.stock_utils import StockUtils
+from .utils.report_utils import extract_conclusion, save_report_pdf, save_report_md, check_pdf_available
 
 
 class TradingAssistantPlugin(Star):
@@ -24,26 +27,34 @@ class TradingAssistantPlugin(Star):
         self.model = None
         self.reasoning = None
         self.llm = None
-        
+
+        # 检查 PDF 依赖可用性
+        self._pdf_available, self._pdf_unavailable_reason = check_pdf_available()
+        if not self._pdf_available:
+            logger.warning(
+                f"PDF 生成不可用（{self._pdf_unavailable_reason}），"
+                f"将以 Markdown 文件导出报告。"
+            )
+
         # 初始化LLM配置
         self._init_llm_config()
     
     def _init_llm_config(self):
         """初始化LLM配置"""
         try:
-            import os
-
             self.api_key = self.config.get('api_key') or os.environ.get('TRADING_ASSISTANT_API_KEY', '')
             self.api_base = self.config.get('api_base') or os.environ.get('TRADING_ASSISTANT_API_BASE', 'https://open.bigmodel.cn/api/paas/v4')
             self.model = self.config.get('model') or os.environ.get('TRADING_ASSISTANT_MODEL', 'glm-4-flash')
             self.reasoning = self.config.get('reasoning')
+            self.timeout_seconds = int(self.config.get('timeout_seconds', 120))
             
             if self.api_key:
-                logger.info(f"LLM配置已加载，模型: {self.model}")
+                logger.info(f"LLM配置已加载，模型: {self.model}, 超时: {self.timeout_seconds}s")
                 self.llm = OpenAICompatibleLLM(
                     api_key=self.api_key,
                     api_base=self.api_base,
-                    model=self.model
+                    model=self.model,
+                    timeout_seconds=self.timeout_seconds,
                 )
             else:
                 logger.warning("未配置 LLM API Key，部分功能可能不可用")
@@ -64,26 +75,37 @@ class TradingAssistantPlugin(Star):
     def _extract_command_arg(message_str: str, command_names: list[str]) -> str:
         cleaned = message_str.strip()
         for command_name in command_names:
-            prefixed = f'/{command_name}'
-            if cleaned.startswith(prefixed):
-                return cleaned[len(prefixed):].strip()
+            for prefix in (f'/{command_name}', command_name):
+                if cleaned.startswith(prefix):
+                    rest = cleaned[len(prefix):]
+                    if not rest or rest[0] in (' ', '\t'):
+                        return rest.strip()
         return cleaned
 
-    async def _resolve_ticker_via_llm(self, raw_input: str) -> str | None:
+    async def _resolve_stock_name(self, raw_input: str) -> str | None:
         """
-        当用户输入不是有效股票代码格式时，调用 LLM 将其解析为股票代码。
+        将用户输入（股票名称/关键词）解析为标准股票代码。
 
-        LLM 会根据名称/描述返回对应的标准股票代码：
-        - A股: 6位纯数字 (如 000905)
-        - 港股: 数字.HK (如 0700.HK)
-        - 美股: 大写字母 (如 AAPL)
+        解析策略（优先级从高到低）：
+        1. **本地查找**：通过 akshare 的 A 股全市场列表精确/模糊匹配（仅限 A 股）
+        2. **LLM 解析**：调用 LLM 解析港股/美股名称或其他无法本地匹配的输入
 
         Args:
-            raw_input: 用户原始输入（如"厦门港务"、"苹果"）
+            raw_input: 用户原始输入（如"厦门港务"、"苹果"、"腾讯"）
 
         Returns:
             解析出的标准股票代码；解析失败时返回 None
         """
+        # ---- 第一步：本地查找（akshare A股列表，精确+模糊匹配） ----
+        try:
+            local_result = StockUtils.resolve_stock_name(raw_input)
+            if local_result:
+                logger.info(f"本地解析股票名称: '{raw_input}' → '{local_result}'")
+                return local_result
+        except Exception as e:
+            logger.warning(f"本地股票名称解析异常，将回退到 LLM: {type(e).__name__}: {repr(e)}")
+
+        # ---- 第二步：LLM 解析（覆盖港股/美股名称等本地无法处理的场景） ----
         llm = await self._get_llm()
 
         prompt = (
@@ -112,13 +134,12 @@ class TradingAssistantPlugin(Star):
             logger.info(f"LLM解析股票名称: '{raw_input}' → '{result}'")
             return result
         except Exception as e:
-            logger.error(f"LLM解析股票名称失败: {e}")
+            logger.error(f"LLM解析股票名称失败: {type(e).__name__}: {repr(e)}")
             return None
 
     @staticmethod
     def _needs_ticker_resolution(ticker: str) -> bool:
         """判断用户输入是否需要 LLM 解析（即不是有效的股票代码格式）"""
-        from .utils.stock_utils import StockUtils
         return not StockUtils.is_valid_stock_code(ticker)
 
     async def _run_stock_analysis(self, ticker: str, event: AstrMessageEvent = None) -> str:
@@ -162,9 +183,9 @@ class TradingAssistantPlugin(Star):
         ticker = message_str
         
         try:
-            # 如果输入不是有效的股票代码格式（如中文股票名称），通过 LLM 解析为代码
+            # 如果输入不是有效的股票代码格式（如中文股票名称），尝试解析为代码
             if self._needs_ticker_resolution(ticker):
-                resolved = await self._resolve_ticker_via_llm(ticker)
+                resolved = await self._resolve_stock_name(ticker)
                 if resolved is None:
                     yield event.plain_result(
                         f"❌ 无法识别「{ticker}」对应的股票。\n"
@@ -179,8 +200,35 @@ class TradingAssistantPlugin(Star):
                 ticker = resolved
 
             report = await self._run_stock_analysis(ticker, event)
-            yield event.plain_result(report)
-            
+
+            # 如果是错误报告，直接返回文字
+            if report.startswith("❌"):
+                yield event.plain_result(report)
+                return
+
+            # 提取结论部分用于文字发送
+            conclusion = extract_conclusion(report)
+
+            # 生成报告文件并发送
+            import astrbot.api.message_components as Comp
+
+            if self._pdf_available:
+                try:
+                    file_path = save_report_pdf(report, ticker)
+                    file_label = "PDF"
+                except Exception as pdf_err:
+                    logger.error(f"PDF 生成失败: {type(pdf_err).__name__}: {repr(pdf_err)}")
+                    file_path = save_report_md(report, ticker)
+                    file_label = "Markdown"
+            else:
+                file_path = save_report_md(report, ticker)
+                file_label = "Markdown"
+
+            chain = [
+                Comp.Plain(f"📊 {ticker} 分析结论：\n\n{conclusion}\n\n---\n📄 完整报告见附件（{file_label}）。"),
+                Comp.File(file=file_path, name=os.path.basename(file_path)),
+            ]
+            yield event.chain_result(chain)
         except ValueError as e:
             yield event.plain_result(f"配置错误: {str(e)}")
         except Exception as e:
@@ -220,9 +268,9 @@ class TradingAssistantPlugin(Star):
         ticker = message_str
         
         try:
-            # 如果输入不是有效的股票代码格式，通过 LLM 解析
+            # 如果输入不是有效的股票代码格式，尝试本地+LLM解析
             if self._needs_ticker_resolution(ticker):
-                resolved = await self._resolve_ticker_via_llm(ticker)
+                resolved = await self._resolve_stock_name(ticker)
                 if resolved is None:
                     yield event.plain_result(
                         f"❌ 无法识别「{ticker}」对应的股票。\n"

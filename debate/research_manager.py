@@ -1,10 +1,9 @@
 """
 研究主管 - 负责协调多方和空方研究，生成综合辩论报告
 """
-import logging
 from typing import Dict
 
-logger = logging.getLogger("debate.manager")
+from astrbot.api import logger
 
 
 class ResearchManager:

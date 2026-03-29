@@ -21,6 +21,11 @@
     "default": false,
     "description": "是否启用推理模式（适配支持该参数的 OpenAI 兼容模型）"
   },
+  "timeout_seconds": {
+    "type": "int",
+    "default": 120,
+    "description": "LLM 单次调用超时时间（秒）。长文本分析建议 ≥ 120 秒"
+  },
   "default_market": {
     "type": "string",
     "default": "AUTO",

@@ -1,12 +1,11 @@
 """
 新闻分析师 - 负责消息面分析
 """
-import logging
 from typing import Dict
 
-from .base import BaseAnalyst
+from astrbot.api import logger
 
-logger = logging.getLogger("analyst.news")
+from .base import BaseAnalyst
 
 
 class NewsAnalyst(BaseAnalyst):

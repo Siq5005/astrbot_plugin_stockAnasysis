@@ -11,4 +11,5 @@ support_platforms:
   - discord
 astrbot_version: ">=4.16,<5"
 display_name: TradingAgents 金融助手
+logo: .assert/image.png
 python_requires: ">=3.9"

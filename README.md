@@ -16,11 +16,13 @@
 - 🤖 **多智能体架构** — 基于 LangGraph 编排市场分析师、基本面分析师、新闻分析师
 - ⚖️ **多空辩论机制** — 多方研究员与空方研究员进行投资辩论，碰撞观点
 - 🛡️ **风险评估裁判** — 风险裁判综合评估整体投资风险等级
+- 🛡️ **移动端支持** — 在移动设备上也能查看分析报告
 
 ### 待实现
 
 - 🌐 **多市场支持** — A 股（沪深）、港股、美股全覆盖
 - 📊 **多数据源** — akshare（A 股/港股/美股实时行情）+ yfinance（港股/美股基本面与新闻）
+- 🧠 **多模型结合** — 结合多厂商模型分析结果
 
 ## 📋 报告示例
 
@@ -105,13 +107,8 @@ git clone https://github.com/YYY7C/TradingAgents-AstrBot.git
 
 - **[TradingAgents](https://github.com/TauricResearch/TradingAgents)** — 提供了多智能体辩论的原始架构与核心思路
 - **[TradingAgents-CN](https://github.com/hsliuping/TradingAgents-CN)** — 提供了中文本地化改进与 A 股适配方案
-- **[AstrBot](https://github.com/AstrBotDevs/AstrBot)** — 优秀的聊天机器人框架，为本插件提供了运行平台
+- **[AstrBot](https://github.com/AstrBotDevs/AstrBot)** — 优秀的Agent框架
 
-## 🔗 相关项目
-
-- [AstrBot](https://github.com/AstrBotDevs/AstrBot) — 易于扩展的多平台聊天机器人框架
-- [TradingAgents](https://github.com/TauricResearch/TradingAgents) — 基于 LLM 的交易智能体框架
-- [TradingAgents-CN](https://github.com/hsliuping/TradingAgents-CN) — TradingAgents 中文化版本
 
 ## ⚠️ 免责声明
 

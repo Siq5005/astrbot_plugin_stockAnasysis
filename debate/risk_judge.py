@@ -1,10 +1,9 @@
 """
 风险裁判 - 负责评估整体投资风险并给出风险等级
 """
-import logging
 from typing import Dict
 
-logger = logging.getLogger("debate.risk_judge")
+from astrbot.api import logger
 
 
 class RiskJudge:

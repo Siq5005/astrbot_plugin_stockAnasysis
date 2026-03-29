@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 
 import aiohttp
 
-logger = logging.getLogger("llm_client")
+from astrbot.api import logger
 
 # 可重试的 HTTP 状态码
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
@@ -25,7 +24,7 @@ class OpenAICompatibleLLM:
         *,
         temperature: float = 0.7,
         max_tokens: int = 4000,
-        timeout_seconds: int = 60,
+        timeout_seconds: int = 120,
         reasoning: bool | None = None,
         max_retries: int = 2,
     ):
@@ -81,6 +80,18 @@ class OpenAICompatibleLLM:
                         content = result["choices"][0]["message"]["content"]
                         return self._clean_response(content)
 
+            except asyncio.TimeoutError as exc:
+                last_error = exc
+                if attempt < self.max_retries:
+                    wait = 2 ** attempt
+                    logger.warning(
+                        "LLM 超时 (尝试 %d/%d, 超时 %ds)，%ds 后重试…",
+                        attempt + 1, self.max_retries + 1, self.timeout_seconds, wait,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                break
+
             except aiohttp.ClientError as exc:
                 last_error = exc
                 if attempt < self.max_retries:
@@ -94,7 +105,7 @@ class OpenAICompatibleLLM:
                 break
 
         raise RuntimeError(
-            f"LLM 调用失败（已重试 {self.max_retries} 次）: {last_error}"
+            f"LLM 调用失败（已重试 {self.max_retries} 次）: {type(last_error).__name__}: {last_error}"
         ) from last_error
 
     @staticmethod
