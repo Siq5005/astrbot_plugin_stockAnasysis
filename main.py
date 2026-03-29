@@ -55,6 +55,7 @@ class TradingAssistantPlugin(Star):
                     api_base=self.api_base,
                     model=self.model,
                     timeout_seconds=self.timeout_seconds,
+                    reasoning=self.reasoning,
                 )
             else:
                 logger.warning("未配置 LLM API Key，部分功能可能不可用")
@@ -167,21 +168,10 @@ class TradingAssistantPlugin(Star):
         
         return report
     
-    @filter.command("股票分析")
-    async def analyze_stock(self, event: AstrMessageEvent) -> MessageEventResult:
-        """
-        股票分析命令
-        用法: /股票分析 <股票代码或名称>
-        例如: /股票分析 000001 或 /股票分析 平安银行
-        """
-        message_str = self._extract_command_arg(event.message_str, ["股票分析", "股票"])
-        
-        if not message_str:
-            yield event.plain_result("请提供股票代码或名称，例如：/股票分析 000001")
-            return
-        
-        ticker = message_str
-        
+    async def _do_stock_analysis(self, ticker_input: str, event: AstrMessageEvent) -> MessageEventResult:
+        """公共股票分析逻辑，供各命令处理器复用。"""
+        ticker = ticker_input
+
         try:
             # 如果输入不是有效的股票代码格式（如中文股票名称），尝试解析为代码
             if self._needs_ticker_resolution(ticker):
@@ -230,10 +220,27 @@ class TradingAssistantPlugin(Star):
             ]
             yield event.chain_result(chain)
         except ValueError as e:
-            yield event.plain_result(f"配置错误: {str(e)}")
+            logger.error(f"配置错误: {e}", exc_info=True)
+            yield event.plain_result("分析服务配置异常，请联系管理员检查插件设置。")
         except Exception as e:
             logger.error(f"股票分析失败: {e}", exc_info=True)
-            yield event.plain_result(f"分析失败: {str(e)}")
+            yield event.plain_result("分析服务暂时不可用，请稍后重试。如果问题持续，请联系管理员。")
+
+    @filter.command("股票分析")
+    async def analyze_stock(self, event: AstrMessageEvent) -> MessageEventResult:
+        """
+        股票分析命令
+        用法: /股票分析 <股票代码或名称>
+        例如: /股票分析 000001 或 /股票分析 平安银行
+        """
+        message_str = self._extract_command_arg(event.message_str, ["股票分析"])
+
+        if not message_str:
+            yield event.plain_result("请提供股票代码或名称，例如：/股票分析 000001")
+            return
+
+        async for result in self._do_stock_analysis(message_str, event):
+            yield result
     
     @filter.command("股票")
     async def stock_command(self, event: AstrMessageEvent) -> MessageEventResult:
@@ -241,16 +248,28 @@ class TradingAssistantPlugin(Star):
         股票查询命令（快捷命令）
         用法: /股票 <代码或名称>
         """
-        async for result in self.analyze_stock(event):
+        message_str = self._extract_command_arg(event.message_str, ["股票"])
+
+        if not message_str:
+            yield event.plain_result("请提供股票代码或名称，例如：/股票 000001")
+            return
+
+        async for result in self._do_stock_analysis(message_str, event):
             yield result
-    
+
     @filter.command("年报")
     async def stock_report(self, event: AstrMessageEvent) -> MessageEventResult:
         """
         股票报告命令
         用法: /年报 <股票代码>
         """
-        async for result in self.analyze_stock(event):
+        message_str = self._extract_command_arg(event.message_str, ["年报"])
+
+        if not message_str:
+            yield event.plain_result("请提供股票代码，例如：/年报 000001")
+            return
+
+        async for result in self._do_stock_analysis(message_str, event):
             yield result
     
     @filter.command("查股")
@@ -305,8 +324,8 @@ class TradingAssistantPlugin(Star):
             yield event.plain_result(info_text)
             
         except Exception as e:
-            logger.error(f"股票查询失败: {e}")
-            yield event.plain_result(f"查询失败: {str(e)}")
+            logger.error(f"股票查询失败: {e}", exc_info=True)
+            yield event.plain_result("查询服务暂时不可用，请稍后重试。")
     
     @filter.command("帮助")
     async def show_help(self, event: AstrMessageEvent) -> MessageEventResult:
@@ -344,4 +363,7 @@ class TradingAssistantPlugin(Star):
     
     async def terminate(self):
         """插件卸载时调用"""
+        # 关闭 LLM 客户端连接
+        if self.llm is not None and hasattr(self.llm, 'close'):
+            await self.llm.close()
         logger.info("TradingAssistantPlugin 卸载中...")

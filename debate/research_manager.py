@@ -34,6 +34,15 @@ class ResearchManager:
         bear_task = self.bear_researcher.research(ticker, trade_date, context)
         
         bull_report, bear_report = await self._run_parallel(bull_task, bear_task)
+
+        # 处理并行执行中的异常
+        import asyncio
+        if isinstance(bull_report, Exception):
+            logger.error(f"多方研究异常: {bull_report}")
+            bull_report = f"多方研究失败: {type(bull_report).__name__}: {bull_report}"
+        if isinstance(bear_report, Exception):
+            logger.error(f"空方研究异常: {bear_report}")
+            bear_report = f"空方研究失败: {type(bear_report).__name__}: {bear_report}"
         
         # 生成综合辩论报告
         debate_report = await self._synthesize_debate(
@@ -118,6 +127,14 @@ class ResearchManager:
 - 给出基于辩论的综合投资建议
 """
         
-        response = await self.llm.ask(prompt)
+        import asyncio
+        try:
+            response = await asyncio.wait_for(
+                self.llm.ask(prompt),
+                timeout=120,
+            )
+        except asyncio.TimeoutError:
+            logger.error("辩论综合报告生成超时（120s）")
+            response = "⚠️ 辩论综合报告生成超时，请稍后重试。"
         
         return response

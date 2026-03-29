@@ -1,7 +1,7 @@
 """
 空方研究员 - 负责挖掘股票的利空因素
 """
-from typing import Dict, List
+from typing import Dict
 
 from astrbot.api import logger
 

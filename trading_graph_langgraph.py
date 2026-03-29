@@ -111,8 +111,8 @@ class TradingGraphLangGraph:
         # 构建图
         self.graph = self._build_graph()
     
-    def _build_graph(self) -> StateGraph:
-        """构建LangGraph状态图"""
+    def _build_graph(self):
+        """构建LangGraph状态图，返回 CompiledGraph。"""
         
         workflow = StateGraph(AgentState)
         
@@ -193,10 +193,10 @@ class TradingGraphLangGraph:
         """市场分析师节点"""
         logger.info(f"执行市场分析师: {state.ticker}")
 
-        # 检查数据预取是否成功
-        if state.error and '数据源不齐全' in state.error:
-            logger.warning("跳过市场分析师：数据源不齐全")
-            return {"market_analysis": "⚠️ 因数据源缺失，跳过市场分析", "iteration": state.iteration + 1}
+        # 通用错误短路：上游发生致命错误时跳过本节点
+        if state.error:
+            logger.warning(f"跳过市场分析师：上游错误")
+            return {"market_analysis": "⚠️ 因上游数据缺失，跳过市场分析", "iteration": state.iteration + 1}
 
         try:
             analysis = await self.market_analyst.analyze_with_data(
@@ -211,10 +211,10 @@ class TradingGraphLangGraph:
         """基本面分析师节点"""
         logger.info(f"执行基本面分析师: {state.ticker}")
 
-        # 检查数据预取是否成功
-        if state.error and '数据源不齐全' in state.error:
-            logger.warning("跳过基本面分析师：数据源不齐全")
-            return {"fundamentals_analysis": "⚠️ 因数据源缺失，跳过基本面分析"}
+        # 通用错误短路：上游发生致命错误时跳过本节点
+        if state.error:
+            logger.warning(f"跳过基本面分析师：上游错误")
+            return {"fundamentals_analysis": "⚠️ 因上游数据缺失，跳过基本面分析"}
 
         try:
             analysis = await self.fundamentals_analyst.analyze_with_data(
@@ -229,10 +229,10 @@ class TradingGraphLangGraph:
         """新闻分析师节点"""
         logger.info(f"执行新闻分析师: {state.ticker}")
 
-        # 检查数据预取是否成功
-        if state.error and '数据源不齐全' in state.error:
-            logger.warning("跳过新闻分析师：数据源不齐全")
-            return {"news_analysis": "⚠️ 因数据源缺失，跳过新闻分析"}
+        # 通用错误短路：上游发生致命错误时跳过本节点
+        if state.error:
+            logger.warning(f"跳过新闻分析师：上游错误")
+            return {"news_analysis": "⚠️ 因上游数据缺失，跳过新闻分析"}
 
         try:
             analysis = await self.news_analyst.analyze_with_data(
@@ -305,10 +305,10 @@ class TradingGraphLangGraph:
         """风险裁判节点"""
         logger.info(f"执行风险裁判: {state.ticker}")
 
-        # 检查数据预取是否成功
-        if state.error and '数据源不齐全' in state.error:
-            logger.warning("跳过风险裁判：数据源不齐全")
-            return {"risk_assessment": "⚠️ 因数据源缺失，跳过风险评估"}
+        # 通用错误短路：上游发生致命错误时跳过本节点
+        if state.error:
+            logger.warning(f"跳过风险裁判：上游错误")
+            return {"risk_assessment": "⚠️ 因上游数据缺失，跳过风险评估"}
 
         context = {
             'market_analysis': state.market_analysis,
@@ -337,8 +337,8 @@ class TradingGraphLangGraph:
     def _build_final_report(self, state: AgentState) -> str:
         """构建最终综合报告"""
 
-        # 如果数据预取失败，直接返回错误信息
-        if state.error and '数据源不齐全' in state.error:
+        # 如果上游发生致命错误，直接返回错误信息
+        if state.error:
             return state.error
 
         report = f"""# 📈 {state.stock_name} ({state.ticker}) 分析报告

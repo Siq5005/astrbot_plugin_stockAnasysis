@@ -19,7 +19,7 @@ if PLUGIN_PARENT not in sys.path:
 
 # 默认 API 配置 — 从环境变量读取，请勿在代码中硬编码密钥
 _DEFAULT_API_KEY = os.environ.get("TRADING_ASSISTANT_API_KEY", "")
-_DEFAULT_API_BASE = os.environ.get("TRADING_ASSISTANT_API_BASE", "")
+_DEFAULT_API_BASE = os.environ.get("TRADING_ASSISTANT_API_BASE", "https://open.bigmodel.cn/api/paas/v4")
 _DEFAULT_MODEL = os.environ.get("TRADING_ASSISTANT_MODEL", "glm-4-flash")
 _DEFAULT_TICKER = "AAPL"
 

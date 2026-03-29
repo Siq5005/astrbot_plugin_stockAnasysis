@@ -39,6 +39,20 @@ class OpenAICompatibleLLM:
         self.timeout_seconds = timeout_seconds
         self.reasoning = reasoning
         self.max_retries = max_retries
+        self._session: aiohttp.ClientSession | None = None
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """获取或创建复用的 aiohttp 会话。"""
+        if self._session is None or self._session.closed:
+            timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
+            self._session = aiohttp.ClientSession(timeout=timeout)
+        return self._session
+
+    async def close(self) -> None:
+        """关闭底层连接池，应在插件卸载时调用。"""
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+            self._session = None
 
     async def ask(self, prompt: str) -> str:
         return await self.__call__(prompt)
@@ -57,11 +71,10 @@ class OpenAICompatibleLLM:
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                timeout = aiohttp.ClientTimeout(total=self.timeout_seconds)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.post(
-                        self.url, headers=self.headers, json=payload
-                    ) as response:
+                session = await self._get_session()
+                async with session.post(
+                    self.url, headers=self.headers, json=payload
+                ) as response:
                         if response.status != 200:
                             error_text = await response.text()
                             if response.status in _RETRYABLE_STATUS and attempt < self.max_retries:

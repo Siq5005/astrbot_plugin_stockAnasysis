@@ -13,7 +13,10 @@ class DataFetcher:
         self._akshare_available = None
         self._yfinance_available = None
         self._initialized = False
-        # 初始化curl_cffi补丁（仅执行一次）
+        self._use_curl_cffi = False
+        self._curl_requests = None
+        self._last_request_time = 0
+        # 初始化 HTTP 适配层（不污染全局 requests）
         self._initialize_akshare()
 
     async def _run_blocking(self, func, *args, timeout: int = 30, **kwargs):
@@ -23,106 +26,81 @@ class DataFetcher:
             timeout=timeout,
         )
 
-    def _patch_requests(self):
-        """临时将 requests.get 替换为带补丁的版本，返回原始方法以便恢复。"""
-        if hasattr(self, '_patched_get'):
-            import requests
-            requests.get = self._patched_get
+    def _safe_get(self, url, **kwargs):
+        """
+        安全 HTTP GET：对东方财富 URL 优先使用 curl_cffi（模拟浏览器 TLS 指纹），
+        其余使用标准 requests + 浏览器 headers。
+        **不修改全局 requests.get**。
+        """
+        import time as _time
+        import requests
 
-    def _unpatch_requests(self):
-        """恢复 requests.get 为原始版本。"""
-        if hasattr(self, '_original_get'):
-            import requests
-            requests.get = self._original_get
+        # 东方财富请求节流
+        if 'eastmoney.com' in url:
+            current_time = _time.time()
+            time_since_last = current_time - self._last_request_time
+            if time_since_last < 0.5:
+                _time.sleep(0.5 - time_since_last)
+            self._last_request_time = _time.time()
+
+        # 东方财富 + curl_cffi 可用 → 模拟真实浏览器 TLS 指纹
+        if self._use_curl_cffi and self._curl_requests and 'eastmoney.com' in url:
+            try:
+                curl_kwargs = {
+                    'timeout': kwargs.get('timeout', 10),
+                    'impersonate': "chrome120"
+                }
+                for k in ('params', 'data', 'json'):
+                    if k in kwargs:
+                        curl_kwargs[k] = kwargs[k]
+                return self._curl_requests.get(url, **curl_kwargs)
+            except Exception as e:
+                error_msg = str(e)
+                if 'invalid library' not in error_msg and '400' not in error_msg:
+                    logger.warning(f"⚠️ curl_cffi 请求失败，回退到标准 requests: {e}")
+
+        # 标准 requests 请求：补充浏览器 headers
+        if 'headers' not in kwargs or kwargs['headers'] is None:
+            kwargs['headers'] = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Referer': 'https://www.eastmoney.com/',
+                'Connection': 'keep-alive',
+            }
+        elif isinstance(kwargs['headers'], dict):
+            kwargs['headers'].setdefault('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+            kwargs['headers'].setdefault('Referer', 'https://www.eastmoney.com/')
+            kwargs['headers'].setdefault('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8')
+            kwargs['headers'].setdefault('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8')
+
+        return requests.get(url, **kwargs)
 
     async def _run_akshare(self, func, *args, timeout: int = 30, **kwargs):
-        """在线程池中执行 akshare 调用，仅在调用期间临时 patch requests.get。"""
-        self._patch_requests()
-        try:
-            return await self._run_blocking(func, *args, timeout=timeout, **kwargs)
-        finally:
-            self._unpatch_requests()
+        """在线程池中执行 akshare 调用（不修改全局 requests.get）。"""
+        return await self._run_blocking(func, *args, timeout=timeout, **kwargs)
     
     def _initialize_akshare(self):
         """
-        初始化AKShare连接 - 使用curl_cffi绕过反爬虫
-        复刻 TradingAgents-CN-fixed 的实现
+        初始化 AKShare 连接 - 使用 curl_cffi 绕过反爬虫（方案 B）。
+        不再 patch 全局 requests.get，而是提供 _safe_get() 供内部使用。
         """
         if self._initialized:
             return
             
         try:
-            import requests
-            import time
-
-            # 尝试导入 curl_cffi，如果可用则使用它来绕过反爬虫
+            # 尝试导入 curl_cffi
             try:
                 from curl_cffi import requests as curl_requests
                 self._use_curl_cffi = True
+                self._curl_requests = curl_requests
                 logger.info("🔧 检测到 curl_cffi，将使用它来模拟真实浏览器 TLS 指纹")
             except ImportError:
                 self._use_curl_cffi = False
-                curl_requests = None
+                self._curl_requests = None
                 logger.warning("⚠️ curl_cffi 未安装，将使用标准 requests（可能被反爬虫拦截）")
                 logger.warning("   建议安装: pip install curl-cffi")
-
-            # 构造带重试和指纹伪造的请求适配器，避免污染全局 requests
-            self._original_get = requests.get
-            self._last_request_time = 0
-            self._curl_requests = curl_requests
-
-            def _patched_get(url, **kwargs):
-                """
-                包装 requests.get，自动添加必要 headers 和请求延迟。
-                如可用 curl_cffi，则模拟真实浏览器 TLS 指纹。
-                仅在 DataFetcher 内部使用，不污染全局命名空间。
-                """
-                import time as _time
-
-                # 添加请求延迟，避免被反爬虫封禁
-                if 'eastmoney.com' in url:
-                    current_time = _time.time()
-                    time_since_last = current_time - self._last_request_time
-                    if time_since_last < 0.5:
-                        _time.sleep(0.5 - time_since_last)
-                    self._last_request_time = _time.time()
-
-                # 如果是东方财富网的请求，且 curl_cffi 可用
-                if self._use_curl_cffi and self._curl_requests and 'eastmoney.com' in url:
-                    try:
-                        curl_kwargs = {
-                            'timeout': kwargs.get('timeout', 10),
-                            'impersonate': "chrome120"
-                        }
-                        for k in ('params', 'data', 'json'):
-                            if k in kwargs:
-                                curl_kwargs[k] = kwargs[k]
-
-                        return self._curl_requests.get(url, **curl_kwargs)
-                    except Exception as e:
-                        error_msg = str(e)
-                        if 'invalid library' not in error_msg and '400' not in error_msg:
-                            logger.warning(f"⚠️ curl_cffi 请求失败，回退到标准 requests: {e}")
-
-                # 标准 requests 请求：补充浏览器 headers
-                if 'headers' not in kwargs or kwargs['headers'] is None:
-                    kwargs['headers'] = {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-                        'Accept-Encoding': 'gzip, deflate, br',
-                        'Referer': 'https://www.eastmoney.com/',
-                        'Connection': 'keep-alive',
-                    }
-                elif isinstance(kwargs['headers'], dict):
-                    kwargs['headers'].setdefault('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-                    kwargs['headers'].setdefault('Referer', 'https://www.eastmoney.com/')
-                    kwargs['headers'].setdefault('Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8')
-                    kwargs['headers'].setdefault('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8')
-
-                return self._original_get(url, **kwargs)
-
-            self._patched_get = _patched_get
 
             if self._use_curl_cffi:
                 logger.info("🔧 AKShare 已配置 curl_cffi 模拟真实浏览器（Chrome 120）")
@@ -134,7 +112,7 @@ class DataFetcher:
 
         except Exception as e:
             logger.error(f"❌ AKShare初始化失败: {e}")
-            self._initialized = True  # 标记已尝试初始化，避免重复
+            self._initialized = False  # 允许重试
     
     @property
     def akshare_available(self) -> bool:
@@ -527,11 +505,14 @@ class DataFetcher:
             
             hist_text = ""
             if hist is not None and not hist.empty:
+                # 预计算涨跌幅（Series 级别），避免在 iterrows 行上调用 pct_change()
+                close_pct = hist['Close'].pct_change() * 100
                 hist_text = "### 最近5个交易日\n"
                 for idx, row in hist.tail(5).iterrows():
                     date_str = idx.strftime('%Y-%m-%d')
                     close = row['Close']
-                    pct = row['Close'].pct_change() * 100 if idx != hist.index[0] else 0
+                    pct = close_pct.loc[idx] if idx in close_pct.index else 0
+                    pct = 0 if (pct != pct) else pct  # NaN guard
                     hist_text += f"- **{date_str}**: 收${close:.2f} ({pct:+.2f}%)\n"
             
             return f"""## 美股市场数据
@@ -552,7 +533,7 @@ class DataFetcher:
 | 52周最高 | ${info.get('fiftyTwoWeekHigh', 'N/A')} |
 | 52周最低 | ${info.get('fiftyTwoWeekLow', 'N/A')} |
 | 成交量 | {info.get('volume', info.get('regularMarketVolume', 'N/A')):,} |
-| 总市值 | ${info.get('marketCap', 'N/A'):,.0f if info.get('marketCap') else 'N/A'} |
+| 总市值 | ${format(info.get('marketCap'), ',.0f') if info.get('marketCap') else 'N/A'} |
 | 市盈率(TTM) | {info.get('trailingPE', 'N/A')} |
 | 市净率 | {info.get('priceToBook', 'N/A')} |
 | 股息收益率 | {info.get('dividendYield', 'N/A') or 'N/A'} |
@@ -881,19 +862,19 @@ class DataFetcher:
 | 市净率 | {info.get('priceToBook', 'N/A')} |
 | 市销率 | {info.get('priceToSalesTrailing12Months', 'N/A')} |
 | EV/EBITDA | {info.get('enterpriseToEbitda', 'N/A')} |
-| 市值 | ${info.get('marketCap', 'N/A'):,.0f if info.get('marketCap') else 'N/A'} |
-| 企业价值 | ${info.get('enterpriseValue', 'N/A'):,.0f if info.get('enterpriseValue') else 'N/A'} |
+| 市值 | ${format(info.get('marketCap'), ',.0f') if info.get('marketCap') else 'N/A'} |
+| 企业价值 | ${format(info.get('enterpriseValue'), ',.0f') if info.get('enterpriseValue') else 'N/A'} |
 
 ### 盈利能力（yfinance）
 | 指标 | 数值 |
 |------|------|
 | EPS(TTM) | ${info.get('trailingEps', 'N/A')} |
 | EPS(前瞻) | ${info.get('forwardEps', 'N/A')} |
-| 净利润 | ${info.get('netIncomeToCommon', 'N/A'):,.0f if info.get('netIncomeToCommon') else 'N/A'} |
-| 收入 | ${info.get('totalRevenue', 'N/A'):,.0f if info.get('totalRevenue') else 'N/A'} |
-| 毛利率 | {info.get('grossProfitMargin', 'N/A')*100 if info.get('grossProfitMargin') else 'N/A'}% |
-| 营业利润率 | {info.get('operatingProfitMargin', 'N/A')*100 if info.get('operatingProfitMargin') else 'N/A'}% |
-| 净利率 | {info.get('profitMargins', 'N/A')*100 if info.get('profitMargins') else 'N/A'}% |
+| 净利润 | ${format(info.get('netIncomeToCommon'), ',.0f') if info.get('netIncomeToCommon') else 'N/A'} |
+| 收入 | ${format(info.get('totalRevenue'), ',.0f') if info.get('totalRevenue') else 'N/A'} |
+| 毛利率 | {f"{info.get('grossProfitMargin')*100:.2f}%" if info.get('grossProfitMargin') else 'N/A'} |
+| 营业利润率 | {f"{info.get('operatingProfitMargin')*100:.2f}%" if info.get('operatingProfitMargin') else 'N/A'} |
+| 净利率 | {f"{info.get('profitMargins')*100:.2f}%" if info.get('profitMargins') else 'N/A'} |
 
 ### 财务数据
 {financial_text if financial_text else '暂无详细财务数据'}
@@ -1298,7 +1279,7 @@ class DataFetcher:
             'error_details': error_details,
         }
 
-    def _check_data_valid(self, data: str, source_name: str) -> Dict[str, any]:
+    def _check_data_valid(self, data: str, source_name: str) -> Dict[str, bool | str]:
         """
         检查数据是否有效（非空、非失败信息）。
 
@@ -1314,24 +1295,18 @@ class DataFetcher:
 
         # 检测常见的失败标志
         failure_keywords = [
-            '获取失败', '未安装', '无法获取', '暂无', '不可用',
-            'akshare未安装', 'yfinance未安装',
+            '获取失败', '未安装', '无法获取', '不可用',
             'akshare和yfinance均不可用',
             '需要付费数据源',
         ]
 
-        data_lower = data.strip().lower()
-        data_first_line = data.strip().split('\n')[0].strip()
+        data_stripped = data.strip()
+        data_first_line = data_stripped.split('\n')[0].strip()
 
-        # 如果整段数据非常短且包含失败关键词，则认为失败
-        if len(data.strip()) < 100:
+        # 仅在数据较短（可能是错误消息）时做关键词检测
+        if len(data_stripped) < 200:
             for kw in failure_keywords:
-                if kw in data_first_line or kw in data_lower:
-                    return {'valid': False, 'reason': data_first_line}
-        else:
-            # 较长的数据，仅检查首行是否是纯错误信息
-            for kw in failure_keywords:
-                if data_first_line == kw or data_first_line.endswith(kw):
+                if kw in data_stripped:
                     return {'valid': False, 'reason': data_first_line}
 
         return {'valid': True, 'reason': ''}
