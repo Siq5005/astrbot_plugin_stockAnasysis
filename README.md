@@ -50,7 +50,9 @@ git clone https://github.com/YYY7C/TradingAgents-AstrBot.git
 | `api_base` | API 地址 | `https://open.bigmodel.cn/api/paas/v4` |
 | `model` | 模型名称 | `glm-4-flash` |
 | `reasoning` | 是否启用推理模式 | `false` |
+| `timeout_seconds` | LLM 单次调用超时（秒） | `120` |
 | `default_market` | 默认市场 | `AUTO` |
+| `export_pdf` | 是否导出 PDF 报告，关闭后分模块发送 | `true` |
 
 > 支持 OpenAI 兼容协议的各种模型（智谱 GLM、DeepSeek、OpenAI、MiniMax 等）。推荐使用支持 Function Calling 的模型以获得最佳效果。
 
