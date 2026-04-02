@@ -1,6 +1,7 @@
 """AstrBot 金融助手插件入口。"""
 
 import os
+import re
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api import logger, AstrBotConfig
@@ -36,6 +37,11 @@ class TradingAssistantPlugin(Star):
                 f"将以 Markdown 文件导出报告。"
             )
 
+        # 读取 PDF 导出开关
+        self.export_pdf = self.config.get('export_pdf', True)
+        if not self.export_pdf:
+            logger.info("export_pdf 已关闭，报告将以 Markdown 分模块逐段发送。")
+
         # 初始化LLM配置
         self._init_llm_config()
     
@@ -63,6 +69,28 @@ class TradingAssistantPlugin(Star):
         except Exception as e:
             logger.error(f"初始化LLM配置失败: {e}")
     
+    @staticmethod
+    def split_report_by_sections(report: str) -> list[str]:
+        """将 Markdown 报告按 ## 标题拆分为多个段落，用于分模块发送（防截断）。
+
+        拆分结果示例：
+          [标题+元信息, 市场技术面分析, 基本面分析, 新闻面分析, 多空辩论综合, 风险评估]
+        """
+        # 按「独占一行的 ## 」拆分，每段保留自身标题
+        parts = re.split(r'\n(?=## )', report)
+
+        sections: list[str] = []
+        for part in parts:
+            text = part.strip()
+            if not text:
+                continue
+            # 跳过末尾的生成时间 / 免责声明（不以 # 开头且不是第一段）
+            if sections and not text.startswith('#'):
+                continue
+            sections.append(text)
+
+        return sections
+
     async def _get_llm(self) -> OpenAICompatibleLLM:
         """获取或创建LLM实例"""
         if self.llm is None:
@@ -201,26 +229,33 @@ class TradingAssistantPlugin(Star):
             # 提取结论部分用于文字发送
             conclusion = extract_conclusion(report)
 
-            # 生成报告文件并发送
-            import astrbot.api.message_components as Comp
+            if self.export_pdf:
+                # ── PDF 模式：生成文件附件发送 ──
+                import astrbot.api.message_components as Comp
 
-            if self._pdf_available:
-                try:
-                    file_path = save_report_pdf(report, ticker)
-                    file_label = "PDF"
-                except Exception as pdf_err:
-                    logger.error(f"PDF 生成失败: {type(pdf_err).__name__}: {repr(pdf_err)}")
+                if self._pdf_available:
+                    try:
+                        file_path = save_report_pdf(report, ticker)
+                        file_label = "PDF"
+                    except Exception as pdf_err:
+                        logger.error(f"PDF 生成失败: {type(pdf_err).__name__}: {repr(pdf_err)}")
+                        file_path = save_report_md(report, ticker)
+                        file_label = "Markdown"
+                else:
                     file_path = save_report_md(report, ticker)
                     file_label = "Markdown"
-            else:
-                file_path = save_report_md(report, ticker)
-                file_label = "Markdown"
 
-            chain = [
-                Comp.Plain(f"📊 {ticker} 分析结论：\n\n{conclusion}\n\n---\n📄 完整报告见附件（{file_label}）。"),
-                Comp.File(file=file_path, name=os.path.basename(file_path)),
-            ]
-            yield event.chain_result(chain)
+                chain = [
+                    Comp.Plain(f"📊 {ticker} 分析结论：\n\n{conclusion}\n\n---\n📄 完整报告见附件（{file_label}）。"),
+                    Comp.File(file=file_path, name=os.path.basename(file_path)),
+                ]
+                yield event.chain_result(chain)
+            else:
+                # ── Markdown 分模块模式：逐段发送，防截断 ──
+                yield event.plain_result(f"📊 {ticker} 分析结论：\n\n{conclusion}")
+                sections = self.split_report_by_sections(report)
+                for section in sections:
+                    yield event.plain_result(section)
         except ValueError as e:
             logger.error(f"配置错误: {e}", exc_info=True)
             yield event.plain_result("分析服务配置异常，请联系管理员检查插件设置。")

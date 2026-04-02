@@ -31,5 +31,10 @@
     "default": "AUTO",
     "description": "默认市场",
     "options": ["AUTO", "CN", "HK", "US"]
+  },
+  "export_pdf": {
+    "type": "bool",
+    "default": true,
+    "description": "是否导出 PDF 报告。关闭后将分模块逐段发送 Markdown 报告，不生成文件附件。"
   }
 }

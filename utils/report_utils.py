@@ -10,6 +10,16 @@ from datetime import datetime
 import markdown
 
 
+# ── 内嵌字体路径 ─────────────────────────────────────────────────────
+_FONT_DIR = Path(__file__).resolve().parent.parent / "fonts"
+
+
+def _font_path(filename: str) -> str:
+    """返回字体文件的 file:// URI；文件不存在则返回空字符串（weasyprint 会忽略空 url）。"""
+    p = _FONT_DIR / filename
+    return p.as_uri() if p.exists() else ""
+
+
 # ── 结论提取 ──────────────────────────────────────────────────────────
 
 def extract_conclusion(report: str) -> str:
@@ -177,13 +187,25 @@ _REPORT_HTML_TEMPLATE = """\
 <head>
 <meta charset="utf-8">
 <style>
+  @font-face {{
+    font-family: "Noto Sans SC";
+    src: url("{regular_font_uri}") format("truetype");
+    font-weight: normal;
+    font-style: normal;
+  }}
+  @font-face {{
+    font-family: "Noto Sans SC";
+    src: url("{bold_font_uri}") format("truetype");
+    font-weight: bold;
+    font-style: normal;
+  }}
   @page {{
     size: A4;
     margin: 2cm 2.5cm;
   }}
   body {{
-    font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei",
-                 "WenQuanYi Micro Hei", "Noto Color Emoji", sans-serif;
+    font-family: "Noto Sans SC", "Noto Sans CJK SC", "PingFang SC",
+                 "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;
     font-size: 13px;
     line-height: 1.7;
     color: #333;
@@ -291,7 +313,11 @@ def markdown_to_pdf_bytes(md_text: str) -> bytes:
         extensions=["tables", "fenced_code", "nl2br"],
     )
 
-    full_html = _REPORT_HTML_TEMPLATE.format(body_html=body_html)
+    full_html = _REPORT_HTML_TEMPLATE.format(
+        body_html=body_html,
+        regular_font_uri=_font_path("NotoSansSC-Regular.ttf"),
+        bold_font_uri=_font_path("NotoSansSC-Bold.ttf"),
+    )
 
     # 渲染为 PDF
     pdf_bytes = HTML(string=full_html).write_pdf()
