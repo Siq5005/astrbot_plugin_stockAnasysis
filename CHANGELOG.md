@@ -7,6 +7,19 @@
 
 ---
 
+## [1.1.1] - 2026-04-04
+
+### 新增
+
+- ⚡ **快速分析指令** — 新增 `/快速分析` 命令，跳过多空辩论环节，直接生成分析报告，大幅缩短等待时间
+- 🎯 **快速分析模式架构** — 基于 LangGraph 条件边（conditional edges）实现，分析师生成报告后直接进入风险评估节点
+
+### 修复
+
+- 🐛 **TXT 导出 Emoji 乱码** — 修复 TXT 文本报告导出时 Emoji 显示为"口口口"方块的问题，导出前自动将 Emoji 替换为中文标签
+
+---
+
 ## [1.1.0] - 2026-04-02
 
 ### 新增
@@ -41,5 +54,6 @@
 
 ---
 
+[1.1.1]: https://github.com/YYY7C/TradingAgents-AstrBot/releases/tag/v1.1.1
 [1.1.0]: https://github.com/YYY7C/TradingAgents-AstrBot/releases/tag/v1.1.0
 [1.0.0]: https://github.com/YYY7C/TradingAgents-AstrBot/releases/tag/v1.0.0

@@ -71,6 +71,9 @@ class AgentState:
     # 数据预取结果（包含 missing_sources, error_details 等）
     data_fetch_result: Dict[str, Any] = field(default_factory=dict)
     
+    # 快速分析模式（跳过多空辩论）
+    quick_mode: bool = False
+    
     # 迭代计数
     iteration: int = 0
 
@@ -111,6 +114,18 @@ class TradingGraphLangGraph:
         # 构建图
         self.graph = self._build_graph()
     
+    @staticmethod
+    def _route_after_analysts(state: AgentState) -> str:
+        """条件路由：新闻分析完成后，根据 quick_mode 决定走辩论还是直接风险评估。
+        
+        Returns:
+            "bull_researcher" — 完整模式，进入多空辩论
+            "risk_judge" — 快速模式，跳过辩论直接评估风险
+        """
+        if state.quick_mode:
+            return "risk_judge"
+        return "bull_researcher"
+    
     def _build_graph(self):
         """构建LangGraph状态图，返回 CompiledGraph。"""
         
@@ -137,8 +152,15 @@ class TradingGraphLangGraph:
         workflow.add_edge("market_analyst", "fundamentals_analyst")
         workflow.add_edge("fundamentals_analyst", "news_analyst")
         
-        # 新闻分析后进入辩论阶段
-        workflow.add_edge("news_analyst", "bull_researcher")
+        # 新闻分析后：根据 quick_mode 决定是否跳过辩论阶段
+        workflow.add_conditional_edges(
+            "news_analyst",
+            self._route_after_analysts,
+            {
+                "bull_researcher": "bull_researcher",
+                "risk_judge": "risk_judge",
+            }
+        )
         
         # 多空辩论循环（简单并行后进入研究主管）
         workflow.add_edge("bull_researcher", "bear_researcher")
@@ -326,9 +348,12 @@ class TradingGraphLangGraph:
             'news_analysis': state.news_analysis
         }
 
+        # 快速模式下跳过多空辩论，使用占位文本
+        debate_report = state.debate_report or "快速分析模式：未进行多空辩论分析，请直接基于三分析师结论进行风险评估。"
+
         try:
             risk_assessment = await self.risk_judge.assess_risk_with_data(
-                state.ticker, state.trade_date, context, state.debate_report,
+                state.ticker, state.trade_date, context, debate_report,
                 state.market_data_raw
             )
             return {"risk_assessment": risk_assessment}
@@ -351,12 +376,18 @@ class TradingGraphLangGraph:
         if state.error:
             return state.error
 
-        report = f"""# 📈 {state.stock_name} ({state.ticker}) 分析报告
+        # 快速分析模式标题
+        mode_label = "（快速分析）" if state.quick_mode else ""
+        
+        # 基础报告头
+        report_header = f"""# 📈 {state.stock_name} ({state.ticker}) 分析报告{mode_label}
 
 **分析日期**: {state.trade_date}  
 **市场**: {state.market_info.get('market_name', '未知')}  
-**货币**: {state.market_info.get('currency_name', '未知')}（{state.market_info.get('currency_symbol', '')}）
+**货币**: {state.market_info.get('currency_name', '未知')}（{state.market_info.get('currency_symbol', '')}）"""
 
+        # 构建报告各章节
+        sections = f"""
 ---
 
 ## 📊 市场技术面分析
@@ -373,13 +404,19 @@ class TradingGraphLangGraph:
 
 ## 📰 新闻面分析
 
-{state.news_analysis}
+{state.news_analysis}"""
+
+        # 快速模式下跳过多空辩论综合章节
+        if not state.quick_mode:
+            sections += f"""
 
 ---
 
 ## ⚔️ 多空辩论综合
 
-{state.debate_report}
+{state.debate_report}"""
+
+        sections += f"""
 
 ---
 
@@ -395,9 +432,11 @@ class TradingGraphLangGraph:
 *本报告由AI自动生成，仅供参考，不构成投资建议。*
 """
         
-        return report
+        return report_header + sections
     
-    async def analyze(self, ticker: str, trade_date: str = None, progress_callback: Optional[Callable] = None) -> str:
+    async def analyze(self, ticker: str, trade_date: str = None,
+                     progress_callback: Optional[Callable] = None,
+                     quick_mode: bool = False) -> str:
         """
         执行股票分析
         
@@ -405,6 +444,7 @@ class TradingGraphLangGraph:
             ticker: 股票代码
             trade_date: 交易日期（YYYY-MM-DD），默认为今天
             progress_callback: 进度回调函数（优先于构造时传入的回调）
+            quick_mode: 快速分析模式（跳过多空辩论），默认为 False
             
         Returns:
             完整的分析报告
@@ -427,7 +467,8 @@ class TradingGraphLangGraph:
             ticker=normalized_ticker,
             stock_name=stock_name,
             trade_date=trade_date,
-            market_info=market_info
+            market_info=market_info,
+            quick_mode=quick_mode,
         )
         
         # 执行图（流式）

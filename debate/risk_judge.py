@@ -111,6 +111,16 @@ class RiskJudge:
             if 'volume_ratio' in data:
                 volume_ratio = data.get('volume_ratio', '未知')
         
+        # 判断是否为快速分析模式（无多空辩论）
+        is_quick_mode = not debate_report or "快速分析模式" in debate_report
+        
+        if is_quick_mode:
+            debate_section = """## 分析模式
+本次为快速分析模式，未进行多空辩论。请直接基于以下市场技术面分析、基本面分析和新闻面分析进行综合风险评估。"""
+        else:
+            debate_section = f"""## 辩论综合报告
+{debate_report}"""
+        
         return f"""你是一位资深的风险管理专家，负责评估股票的整体投资风险。
 
 ## 股票信息
@@ -124,8 +134,7 @@ class RiskJudge:
 - 量比：{volume_ratio}
 - 市场：{market_info['market_name']}
 
-## 辩论综合报告
-{debate_report}
+{debate_section}
 
 ## 已有分析背景
 ### 市场技术面分析

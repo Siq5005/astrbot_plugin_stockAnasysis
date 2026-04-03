@@ -11,7 +11,7 @@ from .trading_graph_langgraph import TradingGraphLangGraph as FinancialAssistant
 from .data_fetcher import DataFetcher
 from .llm_client import OpenAICompatibleLLM
 from .utils.stock_utils import StockUtils
-from .utils.report_utils import extract_conclusion, save_report_pdf, save_report_md, check_pdf_available
+from .utils.report_utils import extract_conclusion, save_report_pdf, save_report_md, save_report_txt, check_pdf_available
 
 
 class TradingAssistantPlugin(Star):
@@ -31,15 +31,25 @@ class TradingAssistantPlugin(Star):
 
         # 检查 PDF 依赖可用性
         self._pdf_available, self._pdf_unavailable_reason = check_pdf_available()
-        if not self._pdf_available:
-            logger.warning(
-                f"PDF 生成不可用（{self._pdf_unavailable_reason}），"
-                f"将以 Markdown 文件导出报告。"
-            )
+        self._export_txt = False
 
         # 读取 PDF 导出开关
         self.export_pdf = self.config.get('export_pdf', True)
-        if not self.export_pdf:
+
+        if not self._pdf_available:
+            if self.export_pdf:
+                # PDF 不可用但用户开启了 PDF 导出 → 降级为 TXT
+                self._export_txt = True
+                logger.warning(
+                    f"weasyprint 系统依赖缺失，PDF 导出不可用"
+                    f"（{self._pdf_unavailable_reason}），"
+                    f"已自动降级为 TXT 文本导出。"
+                    f"请安装系统依赖（libglib2.0-0, libpango, libcairo2 等）"
+                    f"或在插件配置中关闭 export_pdf。"
+                )
+            self.export_pdf = False
+
+        if not self.config.get('export_pdf', True) and not self._export_txt:
             logger.info("export_pdf 已关闭，报告将以 Markdown 分模块逐段发送。")
 
         # 初始化LLM配置
@@ -173,8 +183,15 @@ class TradingAssistantPlugin(Star):
         """判断用户输入是否需要 LLM 解析（即不是有效的股票代码格式）"""
         return not StockUtils.is_valid_stock_code(ticker)
 
-    async def _run_stock_analysis(self, ticker: str, event: AstrMessageEvent = None) -> str:
-        """执行股票分析，支持实时进度推送"""
+    async def _run_stock_analysis(self, ticker: str, event: AstrMessageEvent = None,
+                                    quick_mode: bool = False) -> str:
+        """执行股票分析，支持实时进度推送
+        
+        Args:
+            ticker: 标准股票代码
+            event: 消息事件（用于进度推送）
+            quick_mode: 快速分析模式（跳过多空辩论），默认为 False
+        """
         llm = await self._get_llm()
         data_fetcher = DataFetcher()
 
@@ -189,8 +206,9 @@ class TradingAssistantPlugin(Star):
 
         graph = FinancialAssistantGraph(llm, data_fetcher, progress_callback=progress_callback)
 
-        logger.info(f"开始分析股票: {ticker}")
-        report = await graph.analyze(ticker)
+        mode_label = "（快速分析）" if quick_mode else ""
+        logger.info(f"开始分析股票{mode_label}: {ticker}")
+        report = await graph.analyze(ticker, quick_mode=quick_mode)
         
         # 检查是否为数据不完整的错误报告
         if report.startswith("❌"):
@@ -198,8 +216,15 @@ class TradingAssistantPlugin(Star):
         
         return report
     
-    async def _do_stock_analysis(self, ticker_input: str, event: AstrMessageEvent) -> MessageEventResult:
-        """公共股票分析逻辑，供各命令处理器复用。"""
+    async def _do_stock_analysis(self, ticker_input: str, event: AstrMessageEvent,
+                                    quick_mode: bool = False) -> MessageEventResult:
+        """公共股票分析逻辑，供各命令处理器复用。
+        
+        Args:
+            ticker_input: 用户输入的股票代码或名称
+            event: 消息事件
+            quick_mode: 快速分析模式（跳过多空辩论），默认为 False
+        """
         ticker = ticker_input
 
         try:
@@ -219,7 +244,7 @@ class TradingAssistantPlugin(Star):
                     await event.send(event.plain_result(f"🔍 已识别「{ticker}」→ {resolved}"))
                 ticker = resolved
 
-            report = await self._run_stock_analysis(ticker, event)
+            report = await self._run_stock_analysis(ticker, event, quick_mode=quick_mode)
 
             # 如果是错误报告，直接返回文字
             if report.startswith("❌"):
@@ -229,11 +254,15 @@ class TradingAssistantPlugin(Star):
             # 提取结论部分用于文字发送
             conclusion = extract_conclusion(report)
 
-            if self.export_pdf:
-                # ── PDF 模式：生成文件附件发送 ──
+            if self.export_pdf or self._export_txt:
+                # ── 文件附件模式 ──
                 import astrbot.api.message_components as Comp
 
-                if self._pdf_available:
+                if self._export_txt:
+                    # PDF 不可用，降级为 TXT
+                    file_path = save_report_txt(report, ticker)
+                    file_label = "TXT"
+                elif self._pdf_available:
                     try:
                         file_path = save_report_pdf(report, ticker)
                         file_label = "PDF"
@@ -292,6 +321,22 @@ class TradingAssistantPlugin(Star):
             return
 
         async for result in self._do_stock_analysis(message_str, event):
+            yield result
+
+    @filter.command("快速分析")
+    async def quick_analyze(self, event: AstrMessageEvent) -> MessageEventResult:
+        """
+        快速分析命令（跳过多空辩论）
+        用法: /快速分析 <股票代码或名称>
+        例如: /快速分析 000001 或 /快速分析 平安银行
+        """
+        message_str = self._extract_command_arg(event.message_str, ["快速分析"])
+
+        if not message_str:
+            yield event.plain_result("请提供股票代码或名称，例如：/快速分析 000001")
+            return
+
+        async for result in self._do_stock_analysis(message_str, event, quick_mode=True):
             yield result
 
     @filter.command("年报")
@@ -373,17 +418,27 @@ class TradingAssistantPlugin(Star):
 
 支持以下命令：
 
-1. **股票分析** - 生成完整的股票分析报告
+1. **股票分析** - 生成完整的股票分析报告（含多空辩论）
    命令: /股票分析 <股票代码或名称>
    示例: /股票分析 000001
          /股票分析 平安银行
          /股票分析 AAPL
 
-2. **快捷分析** - 快速股票查询
+2. **快速分析** - 快速生成分析报告（跳过多空辩论，速度更快）
+   命令: /快速分析 <股票代码或名称>
+   示例: /快速分析 000001
+         /快速分析 平安银行
+         /快速分析 AAPL
+
+3. **快捷分析** - 快速股票查询（等同于 /股票分析）
    命令: /股票 <代码或名称>
    示例: /股票 000001
 
-3. **股票信息** - 查询股票基本信息
+4. **年报** - 查看股票年报
+   命令: /年报 <股票代码>
+   示例: /年报 000001
+
+5. **股票信息** - 查询股票基本信息
    命令: /查股 <代码>
    示例: /查股 000001
 

@@ -113,8 +113,8 @@ def check_pdf_available() -> tuple[bool, str]:
     try:
         from weasyprint import HTML  # noqa: F401
         return True, ""
-    except ImportError:
-        return False, "缺少 weasyprint 库"
+    except (ImportError, OSError) as e:
+        return False, f"缺少 PDF 依赖: {e}"
 
 
 # ── Emoji → 文字标签映射（PDF 用） ──────────────────────────────────
@@ -396,5 +396,44 @@ def save_report_md(md_text: str, ticker: str, output_dir: str | None = None) -> 
 
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(md_text)
+
+    return filepath
+
+
+def save_report_txt(md_text: str, ticker: str, output_dir: str | None = None) -> str:
+    """
+    将报告保存为纯文本 .txt 文件（PDF 不可用时的降级方案）。
+
+    Args:
+        md_text: Markdown 格式的报告
+        ticker: 股票代码（用于文件名）
+        output_dir: 输出目录
+
+    Returns:
+        保存的 .txt 文件绝对路径
+    """
+    if output_dir is None:
+        try:
+            from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+            base = get_astrbot_data_path()
+            output_dir = os.path.join(
+                str(base), "plugin_data", "astrbot_plugin_tradingagents", "reports"
+            )
+        except ImportError:
+            output_dir = os.path.join(
+                os.path.expanduser("~"), ".astrbot_plugin_tradingagents", "reports"
+            )
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    now = datetime.now()
+    filename = f"{ticker}_{now.strftime('%Y%m%d_%H%M%S')}.txt"
+    filepath = os.path.join(output_dir, filename)
+
+    # 预处理：将 emoji 替换为文字标签，确保纯文本中可正常显示
+    txt_text = _replace_emojis_for_pdf(md_text)
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(txt_text)
 
     return filepath
