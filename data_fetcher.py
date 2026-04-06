@@ -1247,21 +1247,32 @@ class DataFetcher:
         if not data or not data.strip():
             return {'valid': False, 'reason': '数据为空'}
 
-        # 检测常见的失败标志
+        data_stripped = data.strip()
+        data_first_line = data_stripped.split('\n')[0].strip()
+
+        # 通用失败关键词（对所有长度都检测）
         failure_keywords = [
             '获取失败', '未安装', '无法获取', '不可用',
             'akshare和yfinance均不可用',
             '需要付费数据源',
+            '数据失败',     # 匹配 "获取市场数据失败"、"获取基本面数据失败" 等
+            'Connection aborted',  # 网络连接中断
+            'RemoteDisconnected',  # 远程断连
+            'Too Many Requests',   # 频率限制
         ]
 
-        data_stripped = data.strip()
-        data_first_line = data_stripped.split('\n')[0].strip()
+        for kw in failure_keywords:
+            if kw in data_stripped:
+                return {'valid': False, 'reason': data_first_line}
 
-        # 仅在数据较短（可能是错误消息）时做关键词检测
-        if len(data_stripped) < 200:
-            for kw in failure_keywords:
-                if kw in data_stripped:
-                    return {'valid': False, 'reason': data_first_line}
+        # 长文本失败模式检测：Markdown 格式的错误页面
+        long_failure_patterns = [
+            r'暂无.+的行情数据',  # 港股无数据时的返回（如 "暂无港股0700的行情数据"）
+        ]
+        import re
+        for pattern in long_failure_patterns:
+            if re.search(pattern, data_stripped):
+                return {'valid': False, 'reason': data_first_line}
 
         return {'valid': True, 'reason': ''}
 

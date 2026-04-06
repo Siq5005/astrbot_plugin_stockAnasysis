@@ -115,6 +115,18 @@ class TradingGraphLangGraph:
         self.graph = self._build_graph()
     
     @staticmethod
+    def _route_after_prefetch(state: AgentState) -> str:
+        """条件路由：数据预取完成后，根据是否成功决定下一步。
+
+        Returns:
+            "market_analyst" — 数据预取成功，进入分析流程
+            "report_generator" — 数据预取失败，直接生成错误报告
+        """
+        if state.error:
+            return "report_generator"
+        return "market_analyst"
+
+    @staticmethod
     def _route_after_analysts(state: AgentState) -> str:
         """条件路由：新闻分析完成后，根据 quick_mode 决定走辩论还是直接风险评估。
         
@@ -144,9 +156,16 @@ class TradingGraphLangGraph:
         
         # 设置入口点：先进行数据预取
         workflow.add_edge(START, "data_prefetch")
-        
-        # 数据预取完成后进入分析师阶段
-        workflow.add_edge("data_prefetch", "market_analyst")
+
+        # 数据预取完成后：根据是否成功决定进入分析师还是直接生成错误报告
+        workflow.add_conditional_edges(
+            "data_prefetch",
+            self._route_after_prefetch,
+            {
+                "market_analyst": "market_analyst",
+                "report_generator": "report_generator",
+            }
+        )
         
         # 分析师链式连接
         workflow.add_edge("market_analyst", "fundamentals_analyst")
@@ -482,9 +501,9 @@ class TradingGraphLangGraph:
                     # 触发进度回调
                     if callback:
                         if node_name == "data_prefetch":
-                            # 检查预取是否成功
-                            if node_output.get("error") and "数据源不齐全" in node_output.get("error", ""):
-                                stage_msg = "❌ 数据源不齐全，无法继续分析"
+                            # 检查预取是否成功：只要 error 字段存在即视为失败
+                            if node_output.get("error"):
+                                stage_msg = "❌ 数据获取失败，无法继续分析"
                             else:
                                 stage_msg = "✅ 数据预取完成，所有信息源已就绪"
                         else:
