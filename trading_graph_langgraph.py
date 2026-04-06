@@ -215,10 +215,24 @@ class TradingGraphLangGraph:
                 missing = fetch_result['missing_sources']
                 details = fetch_result['error_details']
                 detail_lines = "\n".join(f"  - {src}: {details.get(src, '未知原因')}" for src in missing)
+                # 诊断失败原因，生成针对性建议
+                diagnostic_hints = []
+                all_errors = ' '.join(str(v) for v in details.values())
+                if 'RemoteDisconnected' in all_errors or 'Connection aborted' in all_errors:
+                    diagnostic_hints.append('• 数据源服务器拒绝了连接，可能是网络或反爬策略导致')
+                    diagnostic_hints.append('• 建议安装 curl_cffi: `pip install curl_cffi`（可绕过 TLS 指纹检测）')
+                    diagnostic_hints.append('• 如果服务器在海外，可能导致国内数据源访问不稳定')
+                if 'Too Many Requests' in all_errors:
+                    diagnostic_hints.append('• 数据源请求频率过高，请等待几分钟后再试')
+                if not diagnostic_hints:
+                    diagnostic_hints.append('• 请检查网络连接或稍后重试')
+                    diagnostic_hints.append('• 如果问题持续，请确认股票代码是否正确')
+
+                hints_text = '\n'.join(diagnostic_hints)
                 error_msg = (
                     f"❌ 数据源不齐全，无法进行分析。\n\n"
                     f"**缺失的信息源**:\n{detail_lines}\n\n"
-                    f"请检查网络连接或稍后重试。如果问题持续，请确认股票代码是否正确。"
+                    f"**可能的原因与建议**:\n{hints_text}"
                 )
                 result["error"] = error_msg
                 logger.warning(f"数据预取不完整: {missing}")
@@ -506,6 +520,12 @@ class TradingGraphLangGraph:
                                 stage_msg = "❌ 数据获取失败，无法继续分析"
                             else:
                                 stage_msg = "✅ 数据预取完成，所有信息源已就绪"
+                        elif node_name == "report_generator":
+                            # 区分正常报告生成和错误报告生成
+                            if final_state.error or node_output.get("error"):
+                                stage_msg = "📋 正在生成错误报告..."
+                            else:
+                                stage_msg = STAGE_MESSAGES.get(node_name, f"⏳ 正在执行 {node_name}...")
                         else:
                             stage_msg = STAGE_MESSAGES.get(node_name, f"⏳ 正在执行 {node_name}...")
                         try:
