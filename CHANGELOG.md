@@ -7,6 +7,21 @@
 
 ---
 
+## [1.2.0] - 2026-04-08
+
+### 新增
+
+- 📊 **ETF 基金分析支持** — 支持 A 股 ETF（交易所交易基金）的完整分析流程，自动识别 ETF 代码并使用基金专用数据接口（`fund_etf_hist_em` / `fund_etf_spot_em`）获取行情数据
+- 📊 **ETF 基本面/新闻/情绪分析** — ETF 分析生成专用的基本面摘要、相关新闻和投资者情绪报告，区别于普通股票的分析逻辑
+- 🔄 **腾讯财经数据源降级** — 当东方财富 `push2` 接口被服务器 IP 封禁时，自动降级到腾讯财经接口（`qt.gtimg.cn` / `web.ifzq.gtimg.cn`）获取 A 股 K 线和实时行情，提升数据获取成功率
+- 🔍 **ETF 代码自动识别** — 支持上海 ETF（51/56/58 开头）和深圳 ETF（15/16 开头）的自动识别，无需手动指定市场
+
+### 改进
+
+- 📝 **README 文档更新** — 新增 ETF 支持说明、ETF 代码前缀对照表和使用示例
+
+---
+
 ## [1.1.3] - 2026-04-06
 
 ### 改进
@@ -74,6 +89,9 @@
 
 ---
 
+[1.2.0]: https://github.com/YYY7C/TradingAgents-AstrBot/releases/tag/v1.2.0
+[1.1.3]: https://github.com/YYY7C/TradingAgents-AstrBot/releases/tag/v1.1.3
+[1.1.2]: https://github.com/YYY7C/TradingAgents-AstrBot/releases/tag/v1.1.2
 [1.1.1]: https://github.com/YYY7C/TradingAgents-AstrBot/releases/tag/v1.1.1
 [1.1.0]: https://github.com/YYY7C/TradingAgents-AstrBot/releases/tag/v1.1.0
 [1.0.0]: https://github.com/YYY7C/TradingAgents-AstrBot/releases/tag/v1.0.0

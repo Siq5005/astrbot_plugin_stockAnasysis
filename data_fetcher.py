@@ -62,6 +62,118 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"❌ AKShare初始化失败: {e}")
             self._initialized = False  # 允许重试
+
+    # ------------------------------------------------------------------
+    # 腾讯接口备用数据源（东方财富 push2 被服务器 IP 封禁时的降级方案）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _tencent_code_prefix(code: str) -> str:
+        """根据 A 股代码判断市场前缀（sz / sh）"""
+        if code.startswith(('6', '9', '5')):
+            return 'sh'
+        return 'sz'
+
+    def _tencent_kline(self, code: str, days: int = 60) -> "pd.DataFrame":
+        """通过腾讯接口获取 A 股前复权日 K 线，返回 DataFrame。
+        
+        列: 日期, 开盘, 收盘, 最高, 最低, 成交量
+        """
+        import requests, json
+        import pandas as pd
+
+        prefix = self._tencent_code_prefix(code)
+        url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get'
+        params = {'param': f'{prefix}{code},day,,,{days},qfq'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        resp = requests.get(url, params=params, headers=headers, timeout=15)
+        resp.raise_for_status()
+        data = json.loads(resp.text)
+
+        stock_data = data.get('data', {}).get(f'{prefix}{code}', {})
+        rows = stock_data.get('qfqday') or stock_data.get('day') or []
+
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows, columns=['日期', '开盘', '收盘', '最高', '最低', '成交量'])
+        for col in ('开盘', '收盘', '最高', '最低'):
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df['成交量'] = pd.to_numeric(df['成交量'], errors='coerce')
+        return df
+
+    def _tencent_realtime(self, code: str) -> dict:
+        """通过腾讯接口获取 A 股实时行情，返回解析后的字典。
+        
+        字段: 名称, 最新价, 昨收, 今开, 成交量, 成交额, 最高, 最低,
+              涨跌额, 涨跌幅, 市盈率, 市净率, 总市值, 流通市值
+        """
+        import requests
+
+        prefix = self._tencent_code_prefix(code)
+        url = f'https://qt.gtimg.cn/q={prefix}{code}'
+        resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+        resp.raise_for_status()
+        raw = resp.text
+
+        # 腾讯行情格式: v_sz002299="51~名称~代码~最新~昨收~..."
+        parts = raw.split('~')
+        if len(parts) < 50:
+            return {}
+
+        def _safe_float(idx):
+            try:
+                v = parts[idx].strip()
+                return float(v) if v else None
+            except (ValueError, IndexError):
+                return None
+
+        return {
+            '名称': parts[1],
+            '代码': parts[2],
+            '最新价': _safe_float(3),
+            '昨收': _safe_float(4),
+            '今开': _safe_float(5),
+            '成交量': _safe_float(6),
+            '最高': _safe_float(33) or _safe_float(41),
+            '最低': _safe_float(34) or _safe_float(42),
+            '成交额': _safe_float(37),
+            '涨跌额': _safe_float(31),
+            '涨跌幅': _safe_float(32),
+            '市盈率': _safe_float(39),
+            '总市值': _safe_float(45),
+            '流通市值': _safe_float(44),
+        }
+
+    def _tencent_stock_list(self) -> "pd.DataFrame":
+        """通过腾讯接口获取 A 股列表（名称+代码），用于名称解析缓存。
+        
+        返回 DataFrame 列: 代码, 名称
+        """
+        import requests, json
+        import pandas as pd
+
+        all_rows = []
+        for market in ('sh', 'sz'):
+            # 腾讯批量行情接口，一次可取多只
+            # 使用 market^A 获取对应市场全部A股
+            url = f'https://qt.gtimg.cn/q={market}a'
+            resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
+            if resp.status_code != 200:
+                continue
+            raw = resp.text
+            # 解析: v_sha...="...~名称~代码~..."
+            for line in raw.split(';'):
+                line = line.strip()
+                if not line or '~' not in line:
+                    continue
+                parts = line.split('~')
+                if len(parts) >= 3:
+                    name = parts[1].strip()
+                    code = parts[2].strip()
+                    if name and code and len(code) == 6 and code.isdigit():
+                        all_rows.append({'代码': code, '名称': name})
+
+        return pd.DataFrame(all_rows) if all_rows else pd.DataFrame()
     
     @property
     def akshare_available(self) -> bool:
@@ -104,7 +216,9 @@ class DataFetcher:
         market_info = StockUtils.get_market_info(ticker)
         
         try:
-            if market_info['is_china']:
+            if market_info.get('is_etf'):
+                return await self._get_etf_market_data(ticker, trade_date, market_info)
+            elif market_info['is_china']:
                 return await self._get_china_market_data(ticker, trade_date, market_info)
             elif market_info['is_hk']:
                 return await self._get_hk_market_data(ticker, trade_date, market_info)
@@ -115,7 +229,7 @@ class DataFetcher:
             return f"获取市场数据失败: {str(e)}"
     
     async def _get_china_market_data(self, ticker: str, trade_date: str, market_info: Dict) -> str:
-        """获取A股市场数据（带重试机制）"""
+        """获取A股市场数据（带重试机制 + 腾讯接口降级）"""
         if not self.akshare_available:
             return "akshare未安装，无法获取A股数据"
         
@@ -131,9 +245,10 @@ class DataFetcher:
             end_date = datetime.strptime(trade_date, '%Y-%m-%d')
             start_date = end_date - timedelta(days=30)
             
-            # 重试机制 - 最多尝试3次
+            # 重试机制 - 最多尝试3次（akshare / 东方财富）
             df = None
             last_error = None
+            use_tencent = False  # 标记是否使用了腾讯源
             
             for attempt in range(3):
                 try:
@@ -149,7 +264,7 @@ class DataFetcher:
                         timeout=30,
                     )
                     if df is not None and not df.empty:
-                        logger.info(f"成功获取A股数据: {code}")
+                        logger.info(f"成功获取A股数据(东方财富): {code}")
                         break
                 except asyncio.TimeoutError:
                     last_error = "获取数据超时"
@@ -160,6 +275,25 @@ class DataFetcher:
                 
                 if attempt < 2:
                     await asyncio.sleep(2 ** attempt)  # 指数退避
+            
+            # ---------- 降级: 使用腾讯接口 ----------
+            if df is None or df.empty:
+                logger.info(f"东方财富接口不可用，尝试腾讯接口获取A股数据: {code}")
+                try:
+                    df = await self._run_blocking(self._tencent_kline, code, 30)
+                    if df is not None and not df.empty:
+                        use_tencent = True
+                        # 添加「涨跌幅」列（腾讯 K 线不含此列）
+                        if '涨跌幅' not in df.columns:
+                            prev_close = df['收盘'].shift(1)
+                            df['涨跌幅'] = ((df['收盘'] - prev_close) / prev_close * 100).round(2)
+                        # 添加「成交额」列（近似 = 收盘 * 成交量）
+                        if '成交额' not in df.columns:
+                            df['成交额'] = (df['收盘'] * df['成交量']).round(2)
+                        logger.info(f"成功获取A股数据(腾讯接口): {code}, {len(df)}条")
+                except Exception as e:
+                    logger.warning(f"腾讯接口也失败: {e}")
+                    last_error = f"东方财富: {last_error}; 腾讯: {e}"
             
             if df is None or df.empty:
                 return f"""## A股市场数据
@@ -179,7 +313,7 @@ class DataFetcher:
 3. 股票代码可能不存在或已停牌
 
 ---
-*数据来源: akshare*"""
+*数据来源: akshare / 腾讯财经*"""
             
             # 获取最新数据
             latest = df.iloc[-1]
@@ -189,6 +323,7 @@ class DataFetcher:
             price_change = latest['收盘'] - prev['收盘']
             pct_change = (price_change / prev['收盘'] * 100) if prev['收盘'] != 0 else 0
             
+            source_tag = "腾讯财经" if use_tencent else "东方财富"
             result = f"""## A股市场数据
 
 **股票代码**: {code}
@@ -196,11 +331,12 @@ class DataFetcher:
 **市场**: {market_info['market_name']}
 **交易所**: {market_info['exchange']}
 **货币**: {market_info['currency_name']}（{market_info['currency_symbol']}）
+**数据源**: {source_tag}
 
 ### 近期行情
 | 日期 | 开盘 | 收盘 | 最高 | 最低 | 成交量 | 成交额 | 涨跌幅 |
 |------|------|------|------|------|--------|--------|--------|
-| {latest['日期']} | {latest['开盘']} | {latest['收盘']} | {latest['最高']} | {latest['最低']} | {latest['成交量']} | {latest['成交额']} | {pct_change:.2f}% |
+| {latest['日期']} | {latest['开盘']} | {latest['收盘']} | {latest['最高']} | {latest['最低']} | {latest['成交量']} | {latest.get('成交额', 'N/A')} | {pct_change:.2f}% |
 
 ### 最近5个交易日
 """
@@ -210,13 +346,39 @@ class DataFetcher:
                 _pct_str = f"{_pct:+.2f}" if isinstance(_pct, (int, float)) else str(_pct)
                 result += f"- **{row['日期']}**: 收{row['收盘']} ({_pct_str}%)\n"
             
-            # 获取实时行情（带重试）
-            try:
-                spot_df = await self._run_akshare(ak.stock_zh_a_spot_em, timeout=15)
-                spot_result = spot_df[spot_df['代码'] == code]
-                if not spot_result.empty:
-                    s = spot_result.iloc[0]
-                    result += f"""
+            # 获取实时行情
+            if use_tencent:
+                # 使用腾讯接口获取实时行情
+                try:
+                    rt = await self._run_blocking(self._tencent_realtime, code)
+                    if rt:
+                        result += f"""
+### 实时行情
+| 指标 | 数值 |
+|------|------|
+| 最新价 | {rt.get('最新价', 'N/A')} |
+| 涨跌额 | {rt.get('涨跌额', 'N/A')} |
+| 涨跌幅 | {rt.get('涨跌幅', 'N/A')}% |
+| 成交量 | {rt.get('成交量', 'N/A')} |
+| 成交额 | {rt.get('成交额', 'N/A')} |
+| 最高 | {rt.get('最高', 'N/A')} |
+| 最低 | {rt.get('最低', 'N/A')} |
+| 今开 | {rt.get('今开', 'N/A')} |
+| 昨收 | {rt.get('昨收', 'N/A')} |
+| 市盈率 | {rt.get('市盈率', 'N/A')} |
+| 总市值 | {rt.get('总市值', 'N/A')} |
+| 流通市值 | {rt.get('流通市值', 'N/A')} |
+"""
+                except Exception as e:
+                    logger.warning(f"腾讯实时行情获取失败: {e}")
+            else:
+                # 使用 akshare 获取实时行情（东方财富）
+                try:
+                    spot_df = await self._run_akshare(ak.stock_zh_a_spot_em, timeout=15)
+                    spot_result = spot_df[spot_df['代码'] == code]
+                    if not spot_result.empty:
+                        s = spot_result.iloc[0]
+                        result += f"""
 ### 实时行情
 | 指标 | 数值 |
 |------|------|
@@ -234,8 +396,31 @@ class DataFetcher:
 | 总市值 | {s.get('总市值', 'N/A')} |
 | 流通市值 | {s.get('流通市值', 'N/A')} |
 """
-            except Exception as e:
-                logger.warning(f"获取实时行情失败: {type(e).__name__}: {repr(e)}")
+                except Exception as e:
+                    # 东方财富实时接口也被封，降级到腾讯
+                    logger.warning(f"东方财富实时行情失败，降级腾讯: {e}")
+                    try:
+                        rt = await self._run_blocking(self._tencent_realtime, code)
+                        if rt:
+                            result += f"""
+### 实时行情
+| 指标 | 数值 |
+|------|------|
+| 最新价 | {rt.get('最新价', 'N/A')} |
+| 涨跌额 | {rt.get('涨跌额', 'N/A')} |
+| 涨跌幅 | {rt.get('涨跌幅', 'N/A')}% |
+| 成交量 | {rt.get('成交量', 'N/A')} |
+| 成交额 | {rt.get('成交额', 'N/A')} |
+| 最高 | {rt.get('最高', 'N/A')} |
+| 最低 | {rt.get('最低', 'N/A')} |
+| 今开 | {rt.get('今开', 'N/A')} |
+| 昨收 | {rt.get('昨收', 'N/A')} |
+| 市盈率 | {rt.get('市盈率', 'N/A')} |
+| 总市值 | {rt.get('总市值', 'N/A')} |
+| 流通市值 | {rt.get('流通市值', 'N/A')} |
+"""
+                    except Exception as e2:
+                        logger.warning(f"腾讯实时行情也失败: {e2}")
             
             return result
             
@@ -510,7 +695,9 @@ class DataFetcher:
         market_info = StockUtils.get_market_info(ticker)
         
         try:
-            if market_info['is_china']:
+            if market_info.get('is_etf'):
+                return await self._get_etf_fundamentals(ticker, trade_date, market_info)
+            elif market_info['is_china']:
                 return await self._get_china_fundamentals(ticker, trade_date, market_info)
             elif market_info['is_hk']:
                 return await self._get_hk_fundamentals(ticker, trade_date, market_info)
@@ -853,7 +1040,9 @@ class DataFetcher:
         market_info = StockUtils.get_market_info(ticker)
         
         try:
-            if market_info['is_china']:
+            if market_info.get('is_etf'):
+                return await self._get_etf_news(ticker, trade_date, market_info)
+            elif market_info['is_china']:
                 return await self._get_china_news(ticker, trade_date, market_info)
             elif market_info['is_hk']:
                 return await self._get_hk_news(ticker, trade_date, market_info)
@@ -982,7 +1171,9 @@ class DataFetcher:
         market_info = StockUtils.get_market_info(ticker)
         
         try:
-            if market_info['is_china']:
+            if market_info.get('is_etf'):
+                return await self._get_etf_sentiment(ticker, trade_date, market_info)
+            elif market_info['is_china']:
                 return await self._get_china_sentiment(ticker, trade_date, market_info)
             elif market_info['is_hk']:
                 return await self._get_hk_sentiment(ticker, trade_date, market_info)
@@ -1159,6 +1350,481 @@ class DataFetcher:
         except Exception as e:
             return f"获取美股情绪失败: {str(e)}"
 
+    # ==================== ETF 数据获取方法 ====================
+
+    async def _get_etf_market_data(self, ticker: str, trade_date: str, market_info: Dict) -> str:
+        """获取ETF市场数据（fund_etf_hist_em + fund_etf_spot_em）"""
+        if not self.akshare_available:
+            return "akshare未安装，无法获取ETF数据"
+
+        from .utils.stock_utils import StockUtils
+        import asyncio
+
+        try:
+            import akshare as ak
+            import pandas as pd
+
+            code = StockUtils.strip_market_prefix(ticker)
+
+            end_date = datetime.strptime(trade_date, '%Y-%m-%d')
+            start_date = end_date - timedelta(days=30)
+
+            # === 1. 历史K线 ===
+            hist_text = ""
+            df = None
+            last_error = None
+            for attempt in range(3):
+                try:
+                    logger.info(f"尝试获取ETF数据 (尝试 {attempt + 1}/3): {code}")
+                    df = await self._run_akshare(
+                        ak.fund_etf_hist_em,
+                        symbol=code,
+                        period="daily",
+                        start_date=start_date.strftime('%Y%m%d'),
+                        end_date=end_date.strftime('%Y%m%d'),
+                        adjust="qfq",
+                        timeout=30,
+                    )
+                    if df is not None and not df.empty:
+                        break
+                except asyncio.TimeoutError:
+                    last_error = "获取数据超时"
+                    logger.warning(f"ETF尝试 {attempt + 1} 超时")
+                except Exception as e:
+                    last_error = str(e)
+                    logger.warning(f"ETF尝试 {attempt + 1} 失败: {e}")
+                if attempt < 2:
+                    await asyncio.sleep(2 ** attempt)
+
+            use_tencent = False  # 标记是否使用了腾讯源
+
+            if df is not None and not df.empty:
+                latest = df.iloc[-1]
+                prev = df.iloc[-2] if len(df) > 1 else latest
+                price_change = latest['收盘'] - prev['收盘']
+                pct_change = (price_change / prev['收盘'] * 100) if prev['收盘'] != 0 else 0
+
+                hist_text = f"""### 近期行情
+| 日期 | 开盘 | 收盘 | 最高 | 最低 | 成交量 | 成交额 | 涨跌幅 |
+|------|------|------|------|------|--------|--------|--------|
+| {latest['日期']} | {latest['开盘']} | {latest['收盘']} | {latest['最高']} | {latest['最低']} | {latest['成交量']} | {latest['成交额']} | {pct_change:.2f}% |
+
+### 最近5个交易日
+"""
+                for idx, row in df.tail(5).iterrows():
+                    _pct = row.get('涨跌幅', None)
+                    if _pct is None:
+                        _pct_prev = df.iloc[idx - 1]['收盘'] if idx > 0 else latest['收盘']
+                        _pct = (row['收盘'] - _pct_prev) / _pct_prev * 100 if _pct_prev else 0
+                    _pct_str = f"{_pct:+.2f}" if isinstance(_pct, (int, float)) else str(_pct)
+                    hist_text += f"- **{row['日期']}**: 收{row['收盘']} ({_pct_str}%)\n"
+            else:
+                # akshare 失败，尝试腾讯接口降级
+                logger.info(f"ETF akshare K线失败，尝试腾讯接口降级: {code}")
+                try:
+                    df = await self._run_blocking(self._tencent_kline, code, 30)
+                    if df is not None and not df.empty:
+                        use_tencent = True
+                        latest = df.iloc[-1]
+                        prev = df.iloc[-2] if len(df) > 1 else latest
+                        price_change = latest['收盘'] - prev['收盘']
+                        pct_change = (price_change / prev['收盘'] * 100) if prev['收盘'] != 0 else 0
+
+                        hist_text = f"""### 近期行情（腾讯财经）
+| 日期 | 开盘 | 收盘 | 最高 | 最低 | 成交量 | 涨跌幅 |
+|------|------|------|------|------|--------|--------|
+| {latest['日期']} | {latest['开盘']} | {latest['收盘']} | {latest['最高']} | {latest['最低']} | {latest['成交量']} | {pct_change:.2f}% |
+
+### 最近5个交易日
+"""
+                        for idx, row in df.tail(5).iterrows():
+                            _prev = df.iloc[idx - 1]['收盘'] if idx > 0 else latest['收盘']
+                            _pct = (row['收盘'] - _prev) / _prev * 100 if _prev else 0
+                            hist_text += f"- **{row['日期']}**: 收{row['收盘']} ({_pct:+.2f}%)\n"
+                    else:
+                        hist_text = f"### 历史行情\n无法获取ETF {code} 的历史数据（akshare + 腾讯接口均失败）。原因: {last_error or '未知错误'}\n"
+                except Exception as e:
+                    logger.warning(f"ETF腾讯K线降级也失败: {e}")
+                    hist_text = f"### 历史行情\n无法获取ETF {code} 的历史数据（akshare + 腾讯接口均失败）。原因: {last_error or '未知错误'}\n"
+
+            # === 2. 实时行情 ===
+            realtime_text = ""
+            try:
+                spot_df = await self._run_akshare(ak.fund_etf_spot_em, timeout=15)
+                spot_result = spot_df[spot_df['代码'] == code]
+                if not spot_result.empty:
+                    s = spot_result.iloc[0]
+                    realtime_text = f"""
+### 实时行情
+| 指标 | 数值 |
+|------|------|
+| 名称 | {s.get('名称', 'N/A')} |
+| 最新价 | {s.get('最新价', 'N/A')} |
+| 涨跌额 | {s.get('涨跌额', 'N/A')} |
+| 涨跌幅 | {s.get('涨跌幅', 'N/A')}% |
+| 成交量 | {s.get('成交量', 'N/A')} |
+| 成交额 | {s.get('成交额', 'N/A')} |
+| 最高 | {s.get('最高', 'N/A')} |
+| 最低 | {s.get('最低', 'N/A')} |
+| 今开 | {s.get('今开', 'N/A')} |
+| 昨收 | {s.get('昨收', 'N/A')} |
+| 换手率 | {s.get('换手率', 'N/A')} |
+| IOPV实时估值 | {s.get('IOPV实时估值', 'N/A')} |
+| 基金折价率 | {s.get('基金折价率', 'N/A')} |
+| 总市值 | {s.get('总市值', 'N/A')} |
+| 流通市值 | {s.get('流通市值', 'N/A')} |
+"""
+                else:
+                    # akshare 有返回但没找到该代码，尝试腾讯
+                    raise Exception("fund_etf_spot_em 未找到该ETF")
+            except Exception as e:
+                logger.warning(f"获取ETF实时行情失败: {type(e).__name__}: {repr(e)}")
+                # 腾讯接口降级
+                try:
+                    rt = await self._run_blocking(self._tencent_realtime, code)
+                    if rt:
+                        use_tencent = True
+                        realtime_text = f"""
+### 实时行情（腾讯财经）
+| 指标 | 数值 |
+|------|------|
+| 名称 | {rt.get('名称', 'N/A')} |
+| 最新价 | {rt.get('最新价', 'N/A')} |
+| 涨跌额 | {rt.get('涨跌额', 'N/A')} |
+| 涨跌幅 | {rt.get('涨跌幅', 'N/A')}% |
+| 成交量 | {rt.get('成交量', 'N/A')} |
+| 成交额 | {rt.get('成交额', 'N/A')} |
+| 最高 | {rt.get('最高', 'N/A')} |
+| 最低 | {rt.get('最低', 'N/A')} |
+| 今开 | {rt.get('今开', 'N/A')} |
+| 昨收 | {rt.get('昨收', 'N/A')} |
+| 总市值 | {rt.get('总市值', 'N/A')} |
+| 流通市值 | {rt.get('流通市值', 'N/A')} |
+"""
+                except Exception as e2:
+                    logger.warning(f"ETF腾讯实时行情降级也失败: {e2}")
+
+            source_tag = "腾讯财经" if use_tencent else "东方财富"
+            return f"""## ETF市场数据
+
+**基金代码**: {code}
+**交易日期**: {trade_date}
+**市场**: {market_info['market_name']}
+**交易所**: {market_info['exchange']}
+**货币**: {market_info['currency_name']}（{market_info['currency_symbol']}）
+
+{hist_text}
+{realtime_text}
+---
+*数据来源: akshare（{source_tag}）*
+"""
+        except ImportError:
+            return "akshare未安装，请运行: pip install akshare"
+        except Exception as e:
+            return f"获取ETF市场数据失败: {str(e)}"
+
+    async def _get_etf_fundamentals(self, ticker: str, trade_date: str, market_info: Dict) -> str:
+        """获取ETF基本面数据（基金信息 + NAV + 持仓）"""
+        from .utils.stock_utils import StockUtils
+
+        result_parts = []
+        code = StockUtils.strip_market_prefix(ticker)
+        result_parts.append(f"""## ETF基本面数据
+
+**基金代码**: {code}
+**分析日期**: {trade_date}
+
+⚠️ **注意**: ETF（交易所交易基金）无传统公司财务指标（PE/PB/ROE），以下提供基金特有指标。
+""")
+
+        # === 1. 雪球基金基本信息 ===
+        if self.akshare_available:
+            try:
+                import akshare as ak
+                info_df = await self._run_akshare(
+                    ak.fund_individual_basic_info_xq,
+                    symbol=code,
+                    timeout=30,
+                )
+                if info_df is not None and not info_df.empty:
+                    info_dict = dict(zip(info_df.iloc[:, 0], info_df.iloc[:, 1]))
+                    fund_text = "### 基金基本信息（雪球）\n| 指标 | 数值 |\n|------|------|\n"
+                    key_fields = [
+                        '基金代码', '基金名称', '基金全称', '基金类型',
+                        '成立时间', '最新规模', '基金公司', '基金经理',
+                        '托管银行', '基金评级', '业绩比较基准', '投资策略', '投资目标',
+                    ]
+                    for key in key_fields:
+                        val = info_dict.get(key, '')
+                        if val and str(val) != 'nan':
+                            fund_text += f"| {key} | {val} |\n"
+                    # 输出其他字段
+                    for item, value in info_dict.items():
+                        if item not in key_fields and value and str(value) != 'nan':
+                            fund_text += f"| {item} | {value} |\n"
+                    result_parts.append(fund_text)
+                else:
+                    result_parts.append("### 基金基本信息\n暂无基金基本信息数据\n")
+            except Exception as e:
+                logger.warning(f"获取ETF雪球基金信息失败: {e}")
+                result_parts.append(f"### 基金基本信息\n获取失败: {str(e)}\n")
+
+            # === 2. ETF实时指标（折溢价、规模等） ===
+            spot_ok = False
+            try:
+                import akshare as ak
+                spot_df = await self._run_akshare(ak.fund_etf_spot_em, timeout=15)
+                spot_result = spot_df[spot_df['代码'] == code]
+                if not spot_result.empty:
+                    spot_ok = True
+                    s = spot_result.iloc[0]
+                    metrics_text = """### ETF关键指标（实时）
+| 指标 | 数值 |
+|------|------|
+"""
+                    etf_metrics = [
+                        ('名称', '名称'),
+                        ('最新价', '最新价'),
+                        ('IOPV实时估值', 'IOPV实时估值'),
+                        ('基金折价率', '基金折价率'),
+                        ('总市值', '总市值'),
+                        ('流通市值', '流通市值'),
+                        ('最新份额', '最新份额'),
+                        ('换手率', '换手率'),
+                        ('量比', '量比'),
+                        ('主力净流入-净额', '主力净流入-净额'),
+                        ('主力净流入-净占比', '主力净流入-净占比'),
+                    ]
+                    for display, col in etf_metrics:
+                        val = s.get(col, 'N/A')
+                        if val is not None and str(val) != 'nan':
+                            metrics_text += f"| {display} | {val} |\n"
+                    result_parts.append(metrics_text)
+            except Exception as e:
+                logger.warning(f"获取ETF实时指标失败: {e}")
+
+            if not spot_ok:
+                # akshare 实时指标失败，用腾讯接口降级
+                try:
+                    rt = await self._run_blocking(self._tencent_realtime, code)
+                    if rt:
+                        metrics_text = """### ETF关键指标（实时·腾讯财经）
+| 指标 | 数值 |
+|------|------|
+"""
+                        tencent_metrics = [
+                            ('名称', '名称'),
+                            ('最新价', '最新价'),
+                            ('总市值', '总市值'),
+                            ('流通市值', '流通市值'),
+                        ]
+                        for display, key in tencent_metrics:
+                            val = rt.get(key, 'N/A')
+                            if val is not None and str(val) != 'nan':
+                                metrics_text += f"| {display} | {val} |\n"
+                        result_parts.append(metrics_text)
+                except Exception as e2:
+                    logger.warning(f"ETF基本面腾讯降级也失败: {e2}")
+
+            # === 3. NAV历史（近10个交易日） ===
+            try:
+                import akshare as ak
+                end_date = datetime.strptime(trade_date, '%Y-%m-%d')
+                start_date = end_date - timedelta(days=30)
+                nav_df = await self._run_akshare(
+                    ak.fund_etf_fund_info_em,
+                    fund=code,
+                    start_date=start_date.strftime('%Y%m%d'),
+                    end_date=end_date.strftime('%Y%m%d'),
+                    timeout=30,
+                )
+                if nav_df is not None and not nav_df.empty:
+                    nav_text = "### 净值历史（最近）\n| 日期 | 单位净值 | 累计净值 | 增长率 |\n|------|---------|---------|--------|\n"
+                    for idx, row in nav_df.tail(10).iterrows():
+                        date_val = row.get('净值日期', row.iloc[0] if len(row) > 0 else 'N/A')
+                        nav = row.get('单位净值', row.iloc[1] if len(row) > 1 else 'N/A')
+                        acc_nav = row.get('累计净值', row.iloc[2] if len(row) > 2 else 'N/A')
+                        growth = row.get('日增长率', row.iloc[3] if len(row) > 3 else 'N/A')
+                        nav_text += f"| {date_val} | {nav} | {acc_nav} | {growth} |\n"
+                    result_parts.append(nav_text)
+            except Exception as e:
+                logger.warning(f"获取ETF NAV历史失败: {e}")
+
+            result_parts.append("\n*数据来源: akshare（东方财富 + 雪球）*\n")
+        else:
+            result_parts.append("\nakshare未安装，无法获取ETF基本面数据\n")
+
+        return "\n".join(result_parts)
+
+    async def _get_etf_news(self, ticker: str, trade_date: str, market_info: Dict) -> str:
+        """获取ETF新闻数据（复用A股新闻接口，如失败则提供ETF概要）"""
+        from .utils.stock_utils import StockUtils
+
+        code = StockUtils.strip_market_prefix(ticker)
+
+        # 尝试用 stock_news_em（部分ETF代码也能查到新闻）
+        if self.akshare_available:
+            try:
+                import akshare as ak
+                news_df = await self._run_akshare(ak.stock_news_em, symbol=code, timeout=30)
+
+                if news_df is not None and not news_df.empty:
+                    news_text = f"## ETF新闻数据\n\n**基金代码**: {code}\n**日期**: {trade_date}\n\n### 近期新闻\n"
+                    for idx, row in news_df.head(10).iterrows():
+                        news_time = row.get('发布时间', 'N/A')
+                        news_title = row.get('新闻标题', 'N/A')
+                        news_text += f"- **{news_time}**: {news_title}\n"
+                    return news_text
+            except Exception as e:
+                logger.warning(f"获取ETF新闻失败(尝试stock_news_em): {e}")
+
+        # 备选：尝试获取跟踪指数的新闻背景
+        stock_name = StockUtils.get_stock_name(ticker)
+        return f"""## ETF新闻数据
+
+**基金代码**: {code}
+**基金名称**: {stock_name}
+**日期**: {trade_date}
+
+### 基金概要
+本基金为ETF（交易所交易基金），新闻面请关注：
+1. **跟踪指数变动**: 关注该ETF跟踪的标的指数走势和政策变化
+2. **行业/板块政策**: 影响ETF持仓行业的重大政策调整
+3. **折溢价变化**: 二级市场交易价格与IOPV的偏离程度
+4. **资金流向**: ETF份额变动反映机构资金动向
+5. **成分股调整**: 指数成分股定期调整对ETF的影响
+
+---
+*数据来源: ETF基金无直接新闻接口，以上为投资关注要点*
+"""
+
+    async def _get_etf_sentiment(self, ticker: str, trade_date: str, market_info: Dict) -> str:
+        """获取ETF情绪数据（资金流向 + 折溢价 + 主力动向）"""
+        from .utils.stock_utils import StockUtils
+
+        code = StockUtils.strip_market_prefix(ticker)
+        result_parts = [f"""## ETF情绪数据
+
+**基金代码**: {code}
+**日期**: {trade_date}
+"""]
+
+        if self.akshare_available:
+            sentiment_ok = False
+            try:
+                import akshare as ak
+
+                # ETF实时行情中的情绪指标
+                spot_df = await self._run_akshare(ak.fund_etf_spot_em, timeout=15)
+                spot_result = spot_df[spot_df['代码'] == code]
+                if not spot_result.empty:
+                    sentiment_ok = True
+                    s = spot_result.iloc[0]
+                    sentiment_table = """### ETF情绪指标
+| 指标 | 数值 | 解读 |
+|------|------|------|
+"""
+                    # 折价率 → 情绪方向
+                    discount = s.get('基金折价率', 'N/A')
+                    if isinstance(discount, (int, float)):
+                        direction = "溢价交易，市场情绪偏热" if discount > 0 else "折价交易，市场情绪偏冷"
+                        sentiment_table += f"| 基金折价率 | {discount}% | {direction} |\n"
+                    else:
+                        sentiment_table += f"| 基金折价率 | {discount} | 暂无数据 |\n"
+
+                    # 主力净流入
+                    net_inflow = s.get('主力净流入-净额', 'N/A')
+                    net_pct = s.get('主力净流入-净占比', 'N/A')
+                    if isinstance(net_inflow, (int, float)):
+                        direction = "资金流入，看多" if net_inflow > 0 else "资金流出，看空"
+                        sentiment_table += f"| 主力净流入 | {net_inflow} | {direction} |\n"
+                    else:
+                        sentiment_table += f"| 主力净流入 | {net_inflow} | - |\n"
+                    sentiment_table += f"| 主力净流入占比 | {net_pct}% | - |\n"
+
+                    # 量比
+                    vol_ratio = s.get('量比', 'N/A')
+                    if isinstance(vol_ratio, (int, float)):
+                        vol_desc = "放量" if vol_ratio > 1.5 else ("缩量" if vol_ratio < 0.7 else "正常")
+                        sentiment_table += f"| 量比 | {vol_ratio} | {vol_desc} |\n"
+
+                    # 换手率
+                    turnover = s.get('换手率', 'N/A')
+                    sentiment_table += f"| 换手率 | {turnover}% | 交易活跃度 |\n"
+
+                    result_parts.append(sentiment_table)
+
+                    result_parts.append("""
+### 情绪分析说明
+- **折价率**: ETF市价低于净值(折价)表示情绪偏冷，高于净值(溢价)表示情绪偏热
+- **主力净流入**: 正值表示大资金买入，负值表示大资金卖出
+- **量比**: >1.5表示放量，<0.7表示缩量，反映市场参与度变化
+- **换手率**: 反映ETF二级市场交易活跃程度
+""")
+                else:
+                    result_parts.append("### ETF情绪指标\n暂无实时行情数据\n")
+            except Exception as e:
+                logger.warning(f"获取ETF情绪数据失败: {e}")
+                result_parts.append(f"### ETF情绪指标\n获取失败: {str(e)}\n")
+
+            if not sentiment_ok:
+                # akshare 情绪指标失败，用腾讯接口降级
+                try:
+                    rt = await self._run_blocking(self._tencent_realtime, code)
+                    if rt:
+                        sentiment_table = """### ETF情绪指标（腾讯财经）
+| 指标 | 数值 | 解读 |
+|------|------|------|
+"""
+                        # 涨跌幅 → 情绪方向
+                        chg_pct = rt.get('涨跌幅')
+                        if isinstance(chg_pct, (int, float)):
+                            direction = "上涨，市场情绪偏多" if chg_pct > 0 else "下跌，市场情绪偏空"
+                            sentiment_table += f"| 涨跌幅 | {chg_pct}% | {direction} |\n"
+
+                        # 成交额
+                        amount = rt.get('成交额')
+                        sentiment_table += f"| 成交额 | {amount} | 反映交易活跃度 |\n"
+
+                        # 总市值
+                        mkt_cap = rt.get('总市值')
+                        sentiment_table += f"| 总市值 | {mkt_cap} | 基金规模 |\n"
+
+                        result_parts.append(sentiment_table)
+                        result_parts.append("""
+### 情绪分析说明
+- **涨跌幅**: 正值偏多，负值偏空
+- **成交额**: 反映市场参与度
+- 注: 腾讯接口不提供折溢价、主力净流入等ETF特有指标，以上为有限数据
+""")
+                except Exception as e2:
+                    logger.warning(f"ETF情绪腾讯降级也失败: {e2}")
+
+            # 资金流向历史
+            try:
+                import akshare as ak
+                flow_df = await self._run_akshare(
+                    ak.stock_individual_fund_flow,
+                    stock=code,
+                    market="sh" if code.startswith(('51', '56', '58')) else "sz",
+                    timeout=30,
+                )
+                if flow_df is not None and not flow_df.empty:
+                    flow_text = "### 资金流向（近5日）\n"
+                    for idx, row in flow_df.tail(5).iterrows():
+                        date = row.get('日期', 'N/A')
+                        net = row.get('今日主力净流入-净额', 'N/A')
+                        net_pct = row.get('今日主力净流入-净占比', 'N/A')
+                        flow_text += f"- **{date}**: 主力净流入 {net} ({net_pct}%)\n"
+                    result_parts.append(flow_text)
+            except Exception as e:
+                logger.warning(f"获取ETF资金流向失败: {e}")
+
+            result_parts.append("\n---\n*数据来源: akshare（东方财富）*\n")
+        else:
+            result_parts.append("\nakshare未安装，无法获取ETF情绪数据\n")
+
+        return "\n".join(result_parts)
 
     async def fetch_all_data(self, ticker: str, trade_date: str) -> Dict:
         """

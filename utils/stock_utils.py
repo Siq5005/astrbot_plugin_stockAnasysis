@@ -29,10 +29,18 @@ class StockUtils:
         r'^[A-Z]{1,5}\.[A-Z]{2}$',
     ]
 
-    # 上海交易所代码前缀（6开头）
+    # 上海交易所代码前缀（6开头 + ETF 51/56/58开头）
     SH_PREFIXES = ('SH', 'XSHG', '600', '601', '603', '605', '688')
-    # 深圳交易所代码前缀（0/3开头）
+    # 深圳交易所代码前缀（0/3开头 + ETF 15/16开头）
     SZ_PREFIXES = ('SZ', 'XSHE', '000', '001', '002', '003', '300')
+
+    # 上海 ETF 代码前缀（51/56/58开头，6位数字）
+    SH_ETF_PREFIXES = ('510', '511', '512', '513', '514', '515', '516', '517', '518',
+                       '560', '561', '562', '563', '565',
+                       '580', '581', '582', '585', '588')
+    # 深圳 ETF 代码前缀（15/16开头，6位数字）
+    SZ_ETF_PREFIXES = ('159', '150', '151', '152', '153', '154', '155', '156',
+                       '160', '161', '162', '163', '164', '165', '166', '167', '168')
 
     # A股名称缓存: {股票名称: 股票代码}
     _a_stock_name_cache: Optional[Dict[str, str]] = None
@@ -51,16 +59,18 @@ class StockUtils:
     def _ensure_a_stock_cache(cls):
         """
         确保A股名称→代码缓存已加载（带TTL）。
-        使用 akshare 的 stock_zh_a_spot_em() 获取全市场股票列表。
+        优先使用 akshare 的 stock_zh_a_spot_em()，失败时降级到腾讯接口。
         """
         now = time.time()
         if cls._a_stock_name_cache is not None and (now - cls._a_stock_cache_ts) < cls._A_STOCK_CACHE_TTL:
             return
 
+        cache: Dict[str, str] = {}
+
+        # 1. 尝试 akshare (东方财富)
         try:
             import akshare as ak
             df = ak.stock_zh_a_spot_em()
-            cache: Dict[str, str] = {}
             for _, row in df.iterrows():
                 name = str(row.get('名称', '')).strip()
                 code = str(row.get('代码', '')).strip()
@@ -68,10 +78,38 @@ class StockUtils:
                     cache[name] = code
             cls._a_stock_name_cache = cache
             cls._a_stock_cache_ts = now
+            return
         except Exception:
-            # 缓存加载失败时保持为空，后续会回退
-            if cls._a_stock_name_cache is None:
-                cls._a_stock_name_cache = {}
+            pass  # 继续尝试降级方案
+
+        # 2. 降级: 腾讯批量行情接口
+        try:
+            import requests
+            for market in ('sh', 'sz'):
+                url = f'https://qt.gtimg.cn/q={market}a'
+                resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
+                if resp.status_code != 200:
+                    continue
+                for line in resp.text.split(';'):
+                    line = line.strip()
+                    if not line or '~' not in line:
+                        continue
+                    parts = line.split('~')
+                    if len(parts) >= 3:
+                        name = parts[1].strip()
+                        code = parts[2].strip()
+                        if name and code and len(code) == 6 and code.isdigit():
+                            cache[name] = code
+            if cache:
+                cls._a_stock_name_cache = cache
+                cls._a_stock_cache_ts = now
+                return
+        except Exception:
+            pass
+
+        # 全部失败
+        if cls._a_stock_name_cache is None:
+            cls._a_stock_name_cache = {}
 
     @classmethod
     def resolve_stock_name(cls, ticker: str) -> Optional[str]:
@@ -210,6 +248,12 @@ class StockUtils:
         elif re.match(r'^\d{6}$', ticker):
             if ticker.startswith(('600', '601', '603', '605', '688')):
                 return 'SH' + ticker
+            # 上海 ETF（51/56/58开头）
+            if cls._is_sh_etf_code(ticker):
+                return 'SH' + ticker
+            # 深圳 ETF（15/16开头）
+            if cls._is_sz_etf_code(ticker):
+                return 'SZ' + ticker
             return 'SZ' + ticker
 
         return ticker
@@ -280,10 +324,16 @@ class StockUtils:
                     'resolution_message': f'无法识别股票"{ticker.strip()}"的所属市场，请使用股票代码查询（如：000905、SH600000、0700.HK、AAPL）'
                 }
 
+        # ETF检测（仅A股范围内判断）
+        is_etf = is_china and cls.is_etf(normalized)
+        if is_etf:
+            market_name = '中国A股(ETF)'
+
         return {
             'is_china': is_china,
             'is_hk': is_hk,
             'is_us': is_us,
+            'is_etf': is_etf,
             'market_name': market_name,
             'exchange': exchange,
             'currency_name': currency_name,
@@ -309,6 +359,45 @@ class StockUtils:
             return ticker[2:]
         return ticker
     
+    @classmethod
+    def _is_sh_etf_code(cls, code: str) -> bool:
+        """判断纯6位数字代码是否为上海ETF（51/56/58开头）"""
+        if not code or len(code) < 3:
+            return False
+        return code[:3] in cls.SH_ETF_PREFIXES
+
+    @classmethod
+    def _is_sz_etf_code(cls, code: str) -> bool:
+        """判断纯6位数字代码是否为深圳ETF（15/16开头）"""
+        if not code or len(code) < 3:
+            return False
+        return code[:3] in cls.SZ_ETF_PREFIXES
+
+    @classmethod
+    def is_etf(cls, ticker: str) -> bool:
+        """判断股票代码是否为ETF(交易所交易基金)。
+
+        上海ETF前缀: 510xxx, 511xxx, 512xxx, 513xxx, 514xxx, 515xxx, 56xxxx, 58xxxx
+        深圳ETF前缀: 159xxx, 150xxx, 160xxx, 16xxxx
+
+        Args:
+            ticker: 股票代码(已标准化或原始格式均可)
+
+        Returns:
+            True 表示是ETF代码
+        """
+        normalized = cls.normalize_ticker(ticker)
+
+        if cls._contains_chinese(normalized):
+            return False
+
+        code = cls.strip_market_prefix(normalized)
+
+        if not re.match(r'^\d{6}$', code):
+            return False
+
+        return cls._is_sh_etf_code(code) or cls._is_sz_etf_code(code)
+
     @classmethod
     def is_china_stock(cls, ticker: str) -> bool:
         """判断是否为A股"""
@@ -387,11 +476,22 @@ class StockUtils:
     
     @classmethod
     def _get_china_stock_name(cls, ticker: str) -> str:
-        """获取A股股票名称"""
+        """获取A股/ETF名称"""
         try:
             import akshare as ak
 
             code = cls.strip_market_prefix(ticker)
+
+            # ETF → 使用 fund_etf_spot_em 查询名称
+            if cls.is_etf(ticker):
+                try:
+                    df = ak.fund_etf_spot_em()
+                    result = df[df['代码'] == code]
+                    if not result.empty:
+                        return result.iloc[0]['名称']
+                except Exception:
+                    pass
+                return f"ETF{code}"
 
             # 上海交易所
             if code.startswith(('600', '601', '603', '605', '688')):
@@ -419,6 +519,18 @@ class StockUtils:
                 result = df[df['代码'] == code]
                 if not result.empty:
                     return result.iloc[0]['名称']
+            except Exception:
+                pass
+
+            # 腾讯接口兜底
+            try:
+                import requests
+                prefix = 'sh' if code.startswith(('6', '9', '5')) else 'sz'
+                url = f'https://qt.gtimg.cn/q={prefix}{code}'
+                resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+                parts = resp.text.split('~')
+                if len(parts) >= 2 and parts[1].strip():
+                    return parts[1].strip()
             except Exception:
                 pass
 

@@ -64,7 +64,8 @@ class BaseAnalyst(ABC):
     def _build_analysis_prompt(self, ticker: str, trade_date: str, 
                                market_info: Dict, market_data: str = "",
                                fundamentals_data: str = "", news_data: str = "",
-                               sentiment_data: str = "", extra_context: str = "") -> str:
+                               sentiment_data: str = "", extra_context: str = "",
+                               is_etf: bool = False) -> str:
         """
         构建分析提示词 - 子类可重写
         
@@ -77,6 +78,7 @@ class BaseAnalyst(ABC):
             news_data: 新闻数据
             sentiment_data: 情绪数据
             extra_context: 额外上下文
+            is_etf: 是否为ETF
         """
         from ..utils.stock_utils import StockUtils
         
@@ -85,11 +87,18 @@ class BaseAnalyst(ABC):
         currency = market_info.get('currency_name', '未知')
         currency_symbol = market_info.get('currency_symbol', '')
         
-        prompt = f"""{self._get_system_prompt()}
+        # ETF模式下优先使用ETF专用系统提示词
+        system_prompt = self._get_system_prompt()
+        if is_etf and hasattr(self, '_get_etf_system_prompt'):
+            etf_prompt = self._get_etf_system_prompt()
+            if etf_prompt:
+                system_prompt = etf_prompt
+        
+        prompt = f"""{system_prompt}
 
 ## 分析对象
-- 股票名称: {stock_name}
-- 股票代码: {ticker}
+- {'基金' if is_etf else '股票'}名称: {stock_name}
+- {'基金' if is_etf else '股票'}代码: {ticker}
 - 所属市场: {market_name}
 - 分析日期: {trade_date}
 - 计价货币: {currency}（{currency_symbol}）
