@@ -181,104 +181,106 @@ def _replace_emojis_for_pdf(text: str) -> str:
 
 # ── Markdown → PDF ───────────────────────────────────────────────────
 
-_REPORT_HTML_TEMPLATE = """\
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<style>
-  @font-face {{
-    font-family: "Noto Sans SC";
-    src: url("{regular_font_uri}") format("truetype");
-    font-weight: normal;
-    font-style: normal;
-  }}
-  @font-face {{
-    font-family: "Noto Sans SC";
-    src: url("{bold_font_uri}") format("truetype");
-    font-weight: bold;
-    font-style: normal;
-  }}
-  @page {{
-    size: A4;
-    margin: 2cm 2.5cm;
-  }}
-  body {{
-    font-family: "Noto Sans SC", "Noto Sans CJK SC", "PingFang SC",
-                 "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;
-    font-size: 13px;
-    line-height: 1.7;
-    color: #333;
-  }}
-  h1 {{
-    font-size: 22px;
-    border-bottom: 2px solid #1a73e8;
-    padding-bottom: 8px;
-    color: #1a73e8;
-  }}
-  h2 {{
-    font-size: 17px;
-    margin-top: 24px;
-    color: #333;
-    border-left: 4px solid #1a73e8;
-    padding-left: 10px;
-  }}
-  h3 {{
-    font-size: 15px;
-    color: #555;
-  }}
-  table {{
-    border-collapse: collapse;
-    width: 100%;
-    margin: 10px 0;
-  }}
-  th, td {{
-    border: 1px solid #ddd;
-    padding: 6px 10px;
-    text-align: left;
-    font-size: 12px;
-  }}
-  th {{
-    background-color: #f5f7fa;
-  }}
-  blockquote {{
-    border-left: 4px solid #ddd;
-    margin: 10px 0;
-    padding: 8px 16px;
-    color: #666;
-  }}
-  strong {{
-    color: #222;
-  }}
-  em {{
-    color: #555;
-  }}
-  hr {{
-    border: none;
-    border-top: 1px solid #e0e0e0;
-    margin: 20px 0;
-  }}
-  code {{
-    background: #f5f5f5;
-    padding: 2px 5px;
-    border-radius: 3px;
-    font-size: 12px;
-  }}
-  .footer {{
-    text-align: center;
-    color: #999;
-    font-size: 11px;
-    margin-top: 30px;
-    border-top: 1px solid #e0e0e0;
-    padding-top: 10px;
-  }}
-</style>
-</head>
-<body>
-{body_html}
-</body>
-</html>
-"""
+def _build_report_html(body_html: str, regular_font_uri: str, bold_font_uri: str) -> str:
+    """组装完整的报告 HTML 文档（避免 str.format 与内容中的花括号冲突）。"""
+    return (
+        '<!DOCTYPE html>\n'
+        '<html lang="zh-CN">\n'
+        '<head>\n'
+        '<meta charset="utf-8">\n'
+        '<style>\n'
+        f'  @font-face {{\n'
+        f'    font-family: "Noto Sans SC";\n'
+        f'    src: url("{regular_font_uri}") format("truetype");\n'
+        f'    font-weight: normal;\n'
+        f'    font-style: normal;\n'
+        f'  }}\n'
+        f'  @font-face {{\n'
+        f'    font-family: "Noto Sans SC";\n'
+        f'    src: url("{bold_font_uri}") format("truetype");\n'
+        f'    font-weight: bold;\n'
+        f'    font-style: normal;\n'
+        f'  }}\n'
+        '  @page {\n'
+        '    size: A4;\n'
+        '    margin: 2cm 2.5cm;\n'
+        '  }\n'
+        '  body {\n'
+        '    font-family: "Noto Sans SC", "Noto Sans CJK SC", "PingFang SC",\n'
+        '                 "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;\n'
+        '    font-size: 13px;\n'
+        '    line-height: 1.7;\n'
+        '    color: #333;\n'
+        '  }\n'
+        '  h1 {\n'
+        '    font-size: 22px;\n'
+        '    border-bottom: 2px solid #1a73e8;\n'
+        '    padding-bottom: 8px;\n'
+        '    color: #1a73e8;\n'
+        '  }\n'
+        '  h2 {\n'
+        '    font-size: 17px;\n'
+        '    margin-top: 24px;\n'
+        '    color: #333;\n'
+        '    border-left: 4px solid #1a73e8;\n'
+        '    padding-left: 10px;\n'
+        '  }\n'
+        '  h3 {\n'
+        '    font-size: 15px;\n'
+        '    color: #555;\n'
+        '  }\n'
+        '  table {\n'
+        '    border-collapse: collapse;\n'
+        '    width: 100%;\n'
+        '    margin: 10px 0;\n'
+        '  }\n'
+        '  th, td {\n'
+        '    border: 1px solid #ddd;\n'
+        '    padding: 6px 10px;\n'
+        '    text-align: left;\n'
+        '    font-size: 12px;\n'
+        '  }\n'
+        '  th {\n'
+        '    background-color: #f5f7fa;\n'
+        '  }\n'
+        '  blockquote {\n'
+        '    border-left: 4px solid #ddd;\n'
+        '    margin: 10px 0;\n'
+        '    padding: 8px 16px;\n'
+        '    color: #666;\n'
+        '  }\n'
+        '  strong {\n'
+        '    color: #222;\n'
+        '  }\n'
+        '  em {\n'
+        '    color: #555;\n'
+        '  }\n'
+        '  hr {\n'
+        '    border: none;\n'
+        '    border-top: 1px solid #e0e0e0;\n'
+        '    margin: 20px 0;\n'
+        '  }\n'
+        '  code {\n'
+        '    background: #f5f5f5;\n'
+        '    padding: 2px 5px;\n'
+        '    border-radius: 3px;\n'
+        '    font-size: 12px;\n'
+        '  }\n'
+        '  .footer {\n'
+        '    text-align: center;\n'
+        '    color: #999;\n'
+        '    font-size: 11px;\n'
+        '    margin-top: 30px;\n'
+        '    border-top: 1px solid #e0e0e0;\n'
+        '    padding-top: 10px;\n'
+        '  }\n'
+        '</style>\n'
+        '</head>\n'
+        '<body>\n'
+        + body_html +
+        '\n</body>\n'
+        '</html>'
+    )
 
 
 def markdown_to_pdf_bytes(md_text: str) -> bytes:
@@ -313,7 +315,7 @@ def markdown_to_pdf_bytes(md_text: str) -> bytes:
         extensions=["tables", "fenced_code"],
     )
 
-    full_html = _REPORT_HTML_TEMPLATE.format(
+    full_html = _build_report_html(
         body_html=body_html,
         regular_font_uri=_font_path("NotoSansSC-Regular.ttf"),
         bold_font_uri=_font_path("NotoSansSC-Bold.ttf"),
