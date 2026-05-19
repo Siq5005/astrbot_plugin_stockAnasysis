@@ -112,9 +112,17 @@ def check_pdf_available() -> tuple[bool, str]:
     """
     try:
         from weasyprint import HTML  # noqa: F401
-        return True, ""
     except (ImportError, OSError) as e:
         return False, f"缺少 PDF 依赖: {e}"
+
+    # 检查内嵌字体文件是否存在（Linux 服务器通常无 CJK 系统字体）
+    regular = _FONT_DIR / "NotoSansSC-Regular.ttf"
+    bold = _FONT_DIR / "NotoSansSC-Bold.ttf"
+    if not regular.exists() or not bold.exists():
+        missing = [p.name for p in (regular, bold) if not p.exists()]
+        return False, f"缺少字体文件: {', '.join(missing)}"
+
+    return True, ""
 
 
 # ── Emoji → 文字标签映射（PDF 用） ──────────────────────────────────
@@ -222,13 +230,15 @@ def _build_report_html(body_html: str, regular_font_uri: str, bold_font_uri: str
         '<style>\n'
         f'  @font-face {{\n'
         f'    font-family: "Noto Sans SC";\n'
-        f'    src: url("{regular_font_uri}") format("truetype");\n'
+        f'    src: local("Noto Sans SC"), local("Noto Sans CJK SC"),\n'
+        f'         url("{regular_font_uri}") format("truetype");\n'
         f'    font-weight: normal;\n'
         f'    font-style: normal;\n'
         f'  }}\n'
         f'  @font-face {{\n'
         f'    font-family: "Noto Sans SC";\n'
-        f'    src: url("{bold_font_uri}") format("truetype");\n'
+        f'    src: local("Noto Sans SC Bold"), local("Noto Sans CJK SC Bold"),\n'
+        f'         url("{bold_font_uri}") format("truetype");\n'
         f'    font-weight: bold;\n'
         f'    font-style: normal;\n'
         f'  }}\n'
