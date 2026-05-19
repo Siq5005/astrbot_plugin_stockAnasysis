@@ -271,6 +271,8 @@ def _build_report_html(body_html: str, regular_font_uri: str, bold_font_uri: str
         '    padding: 6px 10px;\n'
         '    text-align: left;\n'
         '    font-size: 12px;\n'
+        '    overflow-wrap: break-word;\n'
+        '    word-wrap: break-word;\n'
         '  }\n'
         '  th {\n'
         '    background-color: #f5f7fa;\n'
