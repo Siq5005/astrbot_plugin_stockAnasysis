@@ -310,7 +310,7 @@ def markdown_to_pdf_bytes(md_text: str) -> bytes:
     # Markdown → HTML
     body_html = markdown.markdown(
         md_for_pdf,
-        extensions=["tables", "fenced_code", "nl2br"],
+        extensions=["tables", "fenced_code"],
     )
 
     full_html = _REPORT_HTML_TEMPLATE.format(
