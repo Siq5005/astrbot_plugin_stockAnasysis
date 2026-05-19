@@ -182,6 +182,34 @@ def _replace_emojis_for_pdf(text: str) -> str:
     return text
 
 
+_TOP_LEVEL_KEYWORDS = (
+    '市场技术面', '基本面', '新闻面', '市场情绪',
+    '综合结论', '多空辩论', '风险评估', '风险提示', '投资建议',
+)
+
+
+def _normalize_heading_levels(md_text: str) -> str:
+    """将 LLM 误用的 ## 标题降级为 ###，仅保留已知顶级章节的 ##。
+
+    规则：
+    - # (h1) 保留不变（报告标题）
+    - ## 中匹配到 _TOP_LEVEL_KEYWORDS 的保留
+    - 其余 ## 降级为 ###
+    - ### 及以下保留不变
+    """
+    lines = md_text.split('\n')
+    result: list[str] = []
+    for line in lines:
+        if line.startswith('## ') and not line.startswith('### '):
+            if any(kw in line for kw in _TOP_LEVEL_KEYWORDS):
+                result.append(line)
+            else:
+                result.append('#' + line)
+        else:
+            result.append(line)
+    return '\n'.join(result)
+
+
 # ── Markdown → PDF ───────────────────────────────────────────────────
 
 def _build_report_html(body_html: str, regular_font_uri: str, bold_font_uri: str) -> str:
@@ -321,6 +349,9 @@ def markdown_to_pdf_bytes(md_text: str) -> bytes:
 
     # 预处理：将 emoji 替换为文字标签，确保 PDF 中可显示
     md_for_pdf = _replace_emojis_for_pdf(md_text)
+
+    # 预处理：规范化标题层级，避免 LLM 误用 ## 导致层级扁平
+    md_for_pdf = _normalize_heading_levels(md_for_pdf)
 
     # Markdown → HTML
     body_html = markdown.markdown(
