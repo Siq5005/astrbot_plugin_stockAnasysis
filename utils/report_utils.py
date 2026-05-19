@@ -129,8 +129,8 @@ def check_pdf_available() -> tuple[bool, str]:
 
 _EMOJI_REPLACEMENTS: list[tuple[re.Pattern, str]] = [
     # 常用符号 emoji
-    (re.compile(r'⚠️|⚠'), '⚠'),
-    (re.compile(r'⚔️|⚔'), '⚔'),
+    (re.compile(r'⚠️|⚠'), '[!]'),
+    (re.compile(r'⚔️|⚔'), '[vs]'),
     (re.compile(r'📊'), '[图表]'),
     (re.compile(r'📈'), '[↑]'),
     (re.compile(r'📉'), '[↓]'),
@@ -141,7 +141,7 @@ _EMOJI_REPLACEMENTS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'💰'), '[资金]'),
     (re.compile(r'💭'), '[观点]'),
     (re.compile(r'🛡️|🛡'), '[防护]'),
-    (re.compile(r'⚡'), '[⚡]'),
+    (re.compile(r'⚡'), '[!]'),
     (re.compile(r'🔥'), '[!]'),
     # 动物（多空用）
     (re.compile(r'🐂'), '[看涨]'),
@@ -152,8 +152,8 @@ _EMOJI_REPLACEMENTS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'🟢'), '○'),
     (re.compile(r'🔵'), '◆'),
     # 其他常见 emoji
-    (re.compile(r'✅'), '✓'),
-    (re.compile(r'❌'), '✗'),
+    (re.compile(r'✅'), '[Y]'),
+    (re.compile(r'❌'), '[N]'),
     (re.compile(r'❗'), '!'),
     (re.compile(r'📌'), '[注]'),
     (re.compile(r'💡'), '[提示]'),
@@ -186,7 +186,7 @@ def _replace_emojis_for_pdf(text: str) -> str:
     # U+1F000-U+1FFFF: Emoticons, Symbols, Transport, etc.
     # U+FE00-U+FE0F: Variation Selectors
     # U+200D: Zero Width Joiner (used in compound emoji)
-    text = re.sub(r'[☀-➿\U0001F000-\U0001FFFF︀-️‍]', '', text)
+    text = re.sub(r'[☀-➿\U0001F000-\U0001FFFF\U0000FE00-\U0000FE0F\U0000200D]', '', text)
     return text
 
 
@@ -354,10 +354,10 @@ def markdown_to_pdf_bytes(md_text: str) -> bytes:
     """
     try:
         from weasyprint import HTML
-    except ImportError:
+    except (ImportError, OSError) as e:
         raise ImportError(
-            "生成 PDF 需要安装 weasyprint，请运行: pip install weasyprint"
-        )
+            f"生成 PDF 需要安装 weasyprint及其系统依赖: {e}"
+        ) from e
 
     # 预处理：将 emoji 替换为文字标签，确保 PDF 中可显示
     md_for_pdf = _replace_emojis_for_pdf(md_text)
