@@ -112,18 +112,26 @@ def check_pdf_available() -> tuple[bool, str]:
     """
     try:
         from weasyprint import HTML  # noqa: F401
-        return True, ""
     except (ImportError, OSError) as e:
         return False, f"缺少 PDF 依赖: {e}"
+
+    # 检查内嵌字体文件是否存在（Linux 服务器通常无 CJK 系统字体）
+    regular = _FONT_DIR / "NotoSansSC-Regular.ttf"
+    bold = _FONT_DIR / "NotoSansSC-Bold.ttf"
+    if not regular.exists() or not bold.exists():
+        missing = [p.name for p in (regular, bold) if not p.exists()]
+        return False, f"缺少字体文件: {', '.join(missing)}"
+
+    return True, ""
 
 
 # ── Emoji → 文字标签映射（PDF 用） ──────────────────────────────────
 
 _EMOJI_REPLACEMENTS: list[tuple[re.Pattern, str]] = [
     # 常用符号 emoji
-    (re.compile(r'⚠️|⚠'), '⚠'),
-    (re.compile(r'⚔️|⚔'), '⚔'),
-    (re.compile(r'📊'), '[数据]'),
+    (re.compile(r'⚠️|⚠'), '[!]'),
+    (re.compile(r'⚔️|⚔'), '[vs]'),
+    (re.compile(r'📊'), '[图表]'),
     (re.compile(r'📈'), '[↑]'),
     (re.compile(r'📉'), '[↓]'),
     (re.compile(r'📋'), '[清单]'),
@@ -133,9 +141,8 @@ _EMOJI_REPLACEMENTS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'💰'), '[资金]'),
     (re.compile(r'💭'), '[观点]'),
     (re.compile(r'🛡️|🛡'), '[防护]'),
-    (re.compile(r'⚡'), '[⚡]'),
+    (re.compile(r'⚡'), '[!]'),
     (re.compile(r'🔥'), '[!]'),
-    (re.compile(r'📊'), '[图表]'),
     # 动物（多空用）
     (re.compile(r'🐂'), '[看涨]'),
     (re.compile(r'🐻'), '[看跌]'),
@@ -145,8 +152,8 @@ _EMOJI_REPLACEMENTS: list[tuple[re.Pattern, str]] = [
     (re.compile(r'🟢'), '○'),
     (re.compile(r'🔵'), '◆'),
     # 其他常见 emoji
-    (re.compile(r'✅'), '✓'),
-    (re.compile(r'❌'), '✗'),
+    (re.compile(r'✅'), '[Y]'),
+    (re.compile(r'❌'), '[N]'),
     (re.compile(r'❗'), '!'),
     (re.compile(r'📌'), '[注]'),
     (re.compile(r'💡'), '[提示]'),
@@ -174,111 +181,159 @@ def _replace_emojis_for_pdf(text: str) -> str:
     """将 Markdown 文本中的 emoji 替换为文字标签，确保 PDF 可正常显示。"""
     for pattern, replacement in _EMOJI_REPLACEMENTS:
         text = pattern.sub(replacement, text)
-    # 兜底：移除剩余的其他 emoji（U+1F300-U+1FFFF 范围）
-    text = re.sub(r'[\U0001F300-\U0001FFFF]', '', text)
+    # 兜底：移除剩余 emoji 和符号（覆盖完整 Unicode emoji 范围）
+    # U+2600-U+27BF: Miscellaneous Symbols & Dingbats
+    # U+1F000-U+1FFFF: Emoticons, Symbols, Transport, etc.
+    # U+FE00-U+FE0F: Variation Selectors
+    # U+200D: Zero Width Joiner (used in compound emoji)
+    text = re.sub(r'[☀-➿\U0001F000-\U0001FFFF\U0000FE00-\U0000FE0F\U0000200D]', '', text)
     return text
+
+
+_TOP_LEVEL_KEYWORDS = (
+    '市场技术面', '基本面', '新闻面', '市场情绪',
+    '综合结论', '多空辩论', '风险评估', '风险提示', '投资建议',
+)
+
+
+def _normalize_heading_levels(md_text: str) -> str:
+    """将 LLM 误用的 ## 标题降级为 ###，仅保留已知顶级章节的 ##。
+
+    规则：
+    - # (h1) 保留不变（报告标题）
+    - ## 中匹配到 _TOP_LEVEL_KEYWORDS 的保留
+    - 其余 ## 降级为 ###
+    - ### 及以下保留不变
+    """
+    lines = md_text.split('\n')
+    result: list[str] = []
+    for line in lines:
+        if line.startswith('## ') and not line.startswith('### '):
+            if any(kw in line for kw in _TOP_LEVEL_KEYWORDS):
+                result.append(line)
+            else:
+                result.append('#' + line)
+        else:
+            result.append(line)
+    return '\n'.join(result)
 
 
 # ── Markdown → PDF ───────────────────────────────────────────────────
 
-_REPORT_HTML_TEMPLATE = """\
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<style>
-  @font-face {{
-    font-family: "Noto Sans SC";
-    src: url("{regular_font_uri}") format("truetype");
-    font-weight: normal;
-    font-style: normal;
-  }}
-  @font-face {{
-    font-family: "Noto Sans SC";
-    src: url("{bold_font_uri}") format("truetype");
-    font-weight: bold;
-    font-style: normal;
-  }}
-  @page {{
-    size: A4;
-    margin: 2cm 2.5cm;
-  }}
-  body {{
-    font-family: "Noto Sans SC", "Noto Sans CJK SC", "PingFang SC",
-                 "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;
-    font-size: 13px;
-    line-height: 1.7;
-    color: #333;
-  }}
-  h1 {{
-    font-size: 22px;
-    border-bottom: 2px solid #1a73e8;
-    padding-bottom: 8px;
-    color: #1a73e8;
-  }}
-  h2 {{
-    font-size: 17px;
-    margin-top: 24px;
-    color: #333;
-    border-left: 4px solid #1a73e8;
-    padding-left: 10px;
-  }}
-  h3 {{
-    font-size: 15px;
-    color: #555;
-  }}
-  table {{
-    border-collapse: collapse;
-    width: 100%;
-    margin: 10px 0;
-  }}
-  th, td {{
-    border: 1px solid #ddd;
-    padding: 6px 10px;
-    text-align: left;
-    font-size: 12px;
-  }}
-  th {{
-    background-color: #f5f7fa;
-  }}
-  blockquote {{
-    border-left: 4px solid #ddd;
-    margin: 10px 0;
-    padding: 8px 16px;
-    color: #666;
-  }}
-  strong {{
-    color: #222;
-  }}
-  em {{
-    color: #555;
-  }}
-  hr {{
-    border: none;
-    border-top: 1px solid #e0e0e0;
-    margin: 20px 0;
-  }}
-  code {{
-    background: #f5f5f5;
-    padding: 2px 5px;
-    border-radius: 3px;
-    font-size: 12px;
-  }}
-  .footer {{
-    text-align: center;
-    color: #999;
-    font-size: 11px;
-    margin-top: 30px;
-    border-top: 1px solid #e0e0e0;
-    padding-top: 10px;
-  }}
-</style>
-</head>
-<body>
-{body_html}
-</body>
-</html>
-"""
+def _build_report_html(body_html: str, regular_font_uri: str, bold_font_uri: str) -> str:
+    """组装完整的报告 HTML 文档（避免 str.format 与内容中的花括号冲突）。"""
+    return (
+        '<!DOCTYPE html>\n'
+        '<html lang="zh-CN">\n'
+        '<head>\n'
+        '<meta charset="utf-8">\n'
+        '<style>\n'
+        f'  @font-face {{\n'
+        f'    font-family: "Noto Sans SC";\n'
+        f'    src: local("Noto Sans SC"), local("Noto Sans CJK SC"),\n'
+        f'         url("{regular_font_uri}") format("truetype");\n'
+        f'    font-weight: normal;\n'
+        f'    font-style: normal;\n'
+        f'  }}\n'
+        f'  @font-face {{\n'
+        f'    font-family: "Noto Sans SC";\n'
+        f'    src: local("Noto Sans SC Bold"), local("Noto Sans CJK SC Bold"),\n'
+        f'         url("{bold_font_uri}") format("truetype");\n'
+        f'    font-weight: bold;\n'
+        f'    font-style: normal;\n'
+        f'  }}\n'
+        '  @page {\n'
+        '    size: A4;\n'
+        '    margin: 2cm 2.5cm;\n'
+        '  }\n'
+        '  body {\n'
+        '    font-family: "Noto Sans SC", "Noto Sans CJK SC", "PingFang SC",\n'
+        '                 "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;\n'
+        '    font-size: 13px;\n'
+        '    line-height: 1.7;\n'
+        '    color: #333;\n'
+        '  }\n'
+        '  h1 {\n'
+        '    font-size: 22px;\n'
+        '    border-bottom: 2px solid #1a73e8;\n'
+        '    padding-bottom: 8px;\n'
+        '    color: #1a73e8;\n'
+        '  }\n'
+        '  h2 {\n'
+        '    font-size: 17px;\n'
+        '    margin-top: 24px;\n'
+        '    color: #333;\n'
+        '    border-left: 4px solid #1a73e8;\n'
+        '    padding-left: 10px;\n'
+        '  }\n'
+        '  h3 {\n'
+        '    font-size: 15px;\n'
+        '    color: #555;\n'
+        '  }\n'
+        '  table {\n'
+        '    border-collapse: collapse;\n'
+        '    width: 100%;\n'
+        '    margin: 10px 0;\n'
+        '    page-break-inside: avoid;\n'
+        '  }\n'
+        '  th, td {\n'
+        '    border: 1px solid #ddd;\n'
+        '    padding: 6px 10px;\n'
+        '    text-align: left;\n'
+        '    font-size: 12px;\n'
+        '    overflow-wrap: break-word;\n'
+        '    word-wrap: break-word;\n'
+        '  }\n'
+        '  th {\n'
+        '    background-color: #f5f7fa;\n'
+        '  }\n'
+        '  blockquote {\n'
+        '    border-left: 4px solid #ddd;\n'
+        '    margin: 10px 0;\n'
+        '    padding: 8px 16px;\n'
+        '    color: #666;\n'
+        '  }\n'
+        '  strong {\n'
+        '    color: #222;\n'
+        '  }\n'
+        '  em {\n'
+        '    color: #555;\n'
+        '  }\n'
+        '  hr {\n'
+        '    border: none;\n'
+        '    border-top: 1px solid #e0e0e0;\n'
+        '    margin: 20px 0;\n'
+        '  }\n'
+        '  code {\n'
+        '    background: #f5f5f5;\n'
+        '    padding: 2px 5px;\n'
+        '    border-radius: 3px;\n'
+        '    font-size: 12px;\n'
+        '  }\n'
+        '  .footer {\n'
+        '    text-align: center;\n'
+        '    color: #999;\n'
+        '    font-size: 11px;\n'
+        '    margin-top: 30px;\n'
+        '    border-top: 1px solid #e0e0e0;\n'
+        '    padding-top: 10px;\n'
+        '  }\n'
+        '  tr {\n'
+        '    page-break-inside: avoid;\n'
+        '  }\n'
+        '  h1, h2, h3 {\n'
+        '    page-break-after: avoid;\n'
+        '  }\n'
+        '  h2 {\n'
+        '    page-break-before: auto;\n'
+        '  }\n'
+        '</style>\n'
+        '</head>\n'
+        '<body>\n'
+        + body_html +
+        '\n</body>\n'
+        '</html>'
+    )
 
 
 def markdown_to_pdf_bytes(md_text: str) -> bytes:
@@ -299,21 +354,24 @@ def markdown_to_pdf_bytes(md_text: str) -> bytes:
     """
     try:
         from weasyprint import HTML
-    except ImportError:
+    except (ImportError, OSError) as e:
         raise ImportError(
-            "生成 PDF 需要安装 weasyprint，请运行: pip install weasyprint"
-        )
+            f"生成 PDF 需要安装 weasyprint及其系统依赖: {e}"
+        ) from e
 
     # 预处理：将 emoji 替换为文字标签，确保 PDF 中可显示
     md_for_pdf = _replace_emojis_for_pdf(md_text)
 
+    # 预处理：规范化标题层级，避免 LLM 误用 ## 导致层级扁平
+    md_for_pdf = _normalize_heading_levels(md_for_pdf)
+
     # Markdown → HTML
     body_html = markdown.markdown(
         md_for_pdf,
-        extensions=["tables", "fenced_code", "nl2br"],
+        extensions=["tables", "fenced_code"],
     )
 
-    full_html = _REPORT_HTML_TEMPLATE.format(
+    full_html = _build_report_html(
         body_html=body_html,
         regular_font_uri=_font_path("NotoSansSC-Regular.ttf"),
         bold_font_uri=_font_path("NotoSansSC-Bold.ttf"),
