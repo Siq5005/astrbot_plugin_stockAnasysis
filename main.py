@@ -264,6 +264,71 @@ class TradingAssistantPlugin(Star):
                 return cached["detail"]
         return f"还没有「{ticker}」的近期分析记录，请先使用 analyze_stock 重新分析。"
 
+    @filter.llm_tool(name="signal_score")
+    async def tool_signal_score(self, event: AstrMessageEvent, code: str) -> str:
+        """计算股票的技术信号综合评分（0-100分），纯数学计算不消耗AI token。
+
+        评分涵盖MACD、均线排列、KDJ、RSI、量能五项指标，直接返回数字评分和买卖信号。
+        适用场景：用户问"技术面怎么看"、"信号如何"、"现在该买还是该卖"时使用。
+
+        Args:
+            code(string): 股票代码，如000001、AAPL、0700.HK
+        """
+        from .signal_calculator import calc_score, format_signal
+        from .data_sources.market_data import query_historical_kline, get_set_code
+
+        ticker = code.strip()
+        is_hk = ".HK" in ticker
+        is_us = ticker.isalpha() and not ticker.isdigit()
+        mkt = "HK" if is_hk else ("US" if is_us else "CN")
+        sc = get_set_code(ticker, mkt)
+        target = 3 if mkt in ("HK", "US") else 0
+        clean = ticker.replace(".HK", "").replace(".SH", "").replace(".SZ", "")
+
+        try:
+            raw = await asyncio.to_thread(query_historical_kline, clean, sc, 60, target, "5,10,20,60")
+            result = calc_score(raw)
+            name = StockUtils.get_stock_name(ticker)
+            return format_signal(ticker, name, result)
+        except Exception as e:
+            return f"信号计算失败: {e}"
+
+    # ================================================================
+    # 命令: /信号 <code>
+    # ================================================================
+    @filter.command("信号")
+    async def signal_score_cmd(self, event: AstrMessageEvent) -> MessageEventResult:
+        """技术信号评分命令。"""
+        arg = self._extract_command_arg(event.message_str, ["信号"])
+        if not arg:
+            yield event.plain_result("要看哪只股票的信号？发代码给我(・ω・)")
+            return
+        ticker = arg.strip()
+        if self._needs_ticker_resolution(ticker):
+            resolved = await self._resolve_stock_name(ticker, event)
+            if not resolved:
+                yield event.plain_result(f"「{ticker}」找不到捏")
+                return
+            ticker = resolved
+
+        from .signal_calculator import calc_score, format_signal
+        from .data_sources.market_data import query_historical_kline, get_set_code
+
+        is_hk = ".HK" in ticker
+        is_us = ticker.isalpha() and not ticker.isdigit()
+        mkt = "HK" if is_hk else ("US" if is_us else "CN")
+        sc = get_set_code(ticker, mkt)
+        target = 3 if mkt in ("HK", "US") else 0
+        clean = ticker.replace(".HK", "").replace(".SH", "").replace(".SZ", "")
+
+        try:
+            raw = await asyncio.to_thread(query_historical_kline, clean, sc, 60, target, "5,10,20,60")
+            result = calc_score(raw)
+            name = StockUtils.get_stock_name(ticker)
+            yield event.plain_result(format_signal(ticker, name, result))
+        except Exception as e:
+            yield event.plain_result(f"信号计算失败: {e}")
+
     # ================================================================
     # 命令: /股票分析 <code>
     # ================================================================
