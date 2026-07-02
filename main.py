@@ -31,6 +31,7 @@ class TradingAssistantPlugin(Star):
         super().__init__(context)
         logger.info("TradingAssistantPlugin v2.0 初始化中...")
         self.config = config or {}
+        self._last_analysis = {}  # {code: {"verdict": "...", "detail": "..."}}
 
         if not guosen_available():
             logger.warning(
@@ -175,9 +176,10 @@ class TradingAssistantPlugin(Star):
 
     @filter.llm_tool(name="analyze_stock")
     async def tool_analyze_stock(self, event: AstrMessageEvent, code: str, quick: bool = False) -> str:
-        """对股票进行完整的多智能体分析（含技术面、基本面、宏观面、多空辩论、风险评估），直接返回买卖建议。
+        """对股票进行完整的多智能体分析（技术面+基本面+宏观面+多空辩论+风险评估），返回一句话买卖结论。
 
-        这是最高层级的分析工具——当用户想分析某只股票时优先使用此工具，无需逐个调用底层数据工具。
+        走完整 LangGraph 并行流程。只返回一句话结论（含股票名、代码、建议）。
+        完整详细分析缓存在后台。如果用户追问"为什么"或"详细说说"，请调用 explain_verdict 工具获取详情。
 
         Args:
             code(string): 股票代码或名称，如000001、平安银行、AAPL、0700.HK
@@ -187,7 +189,6 @@ class TradingAssistantPlugin(Star):
         from astrbot.api.message_components import Plain
         from astrbot.core.message.message_event_result import MessageChain
 
-        # 名称解析
         ticker = code.strip()
         if not StockUtils.is_valid_stock_code(ticker):
             try:
@@ -207,11 +208,50 @@ class TradingAssistantPlugin(Star):
             await progress(f"好嘞，帮你查「{ticker}」，稍等一下下～")
             umo = event.unified_msg_origin
             graph = TradingGraph(self.context, umo, progress_callback=progress)
-            result = await graph.analyze(ticker, quick_mode=quick)
-            return result
+            full_result = await graph.analyze(ticker, quick_mode=quick)
+
+            # 提取一句话结论（第一行）
+            lines = full_result.strip().split("\n")
+            verdict_line = lines[0] if lines else full_result
+            # 找到建议行
+            for line in lines:
+                if "建议" in line or "买入" in line or "卖出" in line or "持有" in line:
+                    verdict_line = line.strip()
+                    break
+
+            # 缓存完整结果
+            self._last_analysis[ticker] = {
+                "verdict": verdict_line,
+                "detail": full_result,
+            }
+            return verdict_line
         except Exception as e:
             logger.error(f"[analyze_stock] 分析失败: {e}", exc_info=True)
             return f"分析失败: {e}"
+
+    @filter.llm_tool(name="explain_verdict")
+    async def tool_explain_verdict(self, event: AstrMessageEvent, code: str) -> str:
+        """获取某只股票上一次分析的完整详细结果（含核心理由、风险提示等）。
+
+        当用户追问"为什么是这个建议"、"详细说说"、"理由是什么"时使用此工具。
+        只有先调用过 analyze_stock 后才能使用，否则返回提示让用户先分析。
+
+        Args:
+            code(string): 股票代码或名称，需与之前 analyze_stock 的参数一致
+        """
+        ticker = code.strip()
+        if not StockUtils.is_valid_stock_code(ticker):
+            try:
+                resolved = StockUtils.resolve_stock_name(ticker)
+                if resolved:
+                    ticker = resolved
+            except Exception:
+                pass
+
+        cached = self._last_analysis.get(ticker)
+        if cached and cached.get("detail"):
+            return cached["detail"]
+        return f"还没有「{ticker}」的分析记录，请先使用 analyze_stock 进行分析。"
 
     # ================================================================
     # 命令: /股票分析 <code>
