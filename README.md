@@ -39,7 +39,7 @@
 在 AstrBot 插件市场搜索 `tradingassistant` 安装，或手动克隆：
 
 ```bash
-git clone https://github.com/YYY7C/TradingAgents-AstrBot.git AstrBot/data/plugins/tradingagents
+git clone https://github.com/Siq5005/astrbot_plugin_stockAnasysis.git AstrBot/data/plugins/stockanalysis
 ```
 
 ### 2. 安装依赖
@@ -190,7 +190,7 @@ API Base: https://dgzt.guosen.com.cn/skills
 本项目采用 [GNU Affero General Public License v3.0](LICENSE) 许可证。
 
 ```
-Copyright (C) 2024-2026 YYY7C
+Copyright (C) 2024-2026 Coe
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published
