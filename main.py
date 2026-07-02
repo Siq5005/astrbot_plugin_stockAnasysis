@@ -13,6 +13,7 @@
 - 报告：Markdown/TXT/PDF 多格式输出
 - 交互：支持斜杠命令和自然语言，LLM 意图识别自动路由
 """
+import asyncio
 import json
 import os
 import re
@@ -20,7 +21,7 @@ from datetime import datetime
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api import logger, AstrBotConfig
-from astrbot.api.star import Context, Star
+from astrbot.api.star import Context, Star, register
 
 from .utils.stock_utils import StockUtils
 from .utils.report_utils import (
@@ -28,9 +29,6 @@ from .utils.report_utils import (
     save_report_txt, check_pdf_available,
 )
 from .data_sources.http_client import is_available as guosen_available
-
-# 导入工具模块触发 @filter.llm_tool 注册（AstrBot 框架发现工具）
-from . import astrbot_tools  # noqa: F401
 
 # ============================================================
 # 自然语言意图识别 prompt
@@ -68,6 +66,7 @@ _INTENT_CLASSIFY_PROMPT = """你是一个金融助手插件的意图识别器。
 输入: "今天天气怎么样"               → {"intent": "unknown", "params": {}}"""
 
 
+@register("astrbot_plugin_stockanalysis", "Coe", "基于国信API的多智能体金融分析插件", "v2.0.0")
 class TradingAssistantPlugin(Star):
     """金融助手插件 —— 国信API + SubAgent 架构"""
 
@@ -102,9 +101,137 @@ class TradingAssistantPlugin(Star):
         logger.info("TradingAssistantPlugin v2.0 已卸载")
 
     # ================================================================
+    # LLM 工具 —— @filter.llm_tool 注册，AstrBot 框架自动发现
+    # ================================================================
+
+    @filter.llm_tool(name="query_single_quote")
+    async def tool_query_single_quote(self, event: AstrMessageEvent, code: str, market: str = "CN") -> str:
+        """获取单只股票实时行情数据，包括最新价、涨跌幅、成交量、市盈率、总市值等。
+
+        Args:
+            code(string): 股票代码，A股6位数字如600519，港股如0700.HK，美股如AAPL
+            market(string): 市场类型，CN表示A股，HK表示港股，US表示美股，默认CN
+        """
+        from .data_sources.market_data import query_single_quote, get_set_code
+        clean = code
+        for s in ('.HK', '.SH', '.SZ', '.BJ'):
+            clean = clean.replace(s, '')
+        set_code = get_set_code(code, market)
+        target = 3 if market in ("HK", "US") else 0
+        result = await asyncio.to_thread(query_single_quote, clean, set_code, target)
+        return json.dumps(result, ensure_ascii=False)
+
+    @filter.llm_tool(name="query_historical_kline")
+    async def tool_query_historical_kline(self, event: AstrMessageEvent, code: str, market: str = "CN", days: int = 60) -> str:
+        """获取股票历史K线数据，包含开高低收价格、成交量和MA均线，用于技术面分析。
+
+        Args:
+            code(string): 股票代码，A股6位数字，港股如0700.HK，美股如AAPL
+            market(string): 市场类型，CN表示A股，HK表示港股，US表示美股，默认CN
+            days(number): 近几个交易日的数据，默认60
+        """
+        from .data_sources.market_data import query_historical_kline, get_set_code
+        clean = code
+        for s in ('.HK', '.SH', '.SZ', '.BJ'):
+            clean = clean.replace(s, '')
+        set_code = get_set_code(code, market)
+        target = 3 if market in ("HK", "US") else 0
+        result = await asyncio.to_thread(query_historical_kline, clean, set_code, days, target, "5,10,20,60")
+        return json.dumps(result, ensure_ascii=False)
+
+    @filter.llm_tool(name="query_fund_flow")
+    async def tool_query_fund_flow(self, event: AstrMessageEvent, code: str, market: str = "CN", period: int = 30) -> str:
+        """获取股票资金流向数据，分析主力、大户、散户的净流入流出情况。
+
+        Args:
+            code(string): 股票代码，A股6位数字，港股如0700.HK，美股如AAPL
+            market(string): 市场类型，CN表示A股，HK表示港股，US表示美股，默认CN
+            period(number): 查询天数，最大60，默认30
+        """
+        from .data_sources.market_data import query_fund_flow, get_set_code
+        clean = code
+        for s in ('.HK', '.SH', '.SZ', '.BJ'):
+            clean = clean.replace(s, '')
+        set_code = get_set_code(code, market)
+        result = await asyncio.to_thread(query_fund_flow, clean, set_code, min(period, 60))
+        return json.dumps(result, ensure_ascii=False)
+
+    @filter.llm_tool(name="query_market_ranking")
+    async def tool_query_market_ranking(self, event: AstrMessageEvent, set_domain: int = 6, want_num: int = 10, sort_type: int = 1) -> str:
+        """查询A股涨跌排名，获取涨幅或跌幅最大的股票列表。
+
+        Args:
+            set_domain(number): 查询范围，0为上证A股，2为深证A股，6为沪深全部，14为创业板，14515为北交所，默认6
+            want_num(number): 返回股票数量，最大80，默认10
+            sort_type(number): 排序方式，1为按涨幅排名，2为按跌幅排名，默认1
+        """
+        from .data_sources.market_data import query_market_ranking
+        result = await asyncio.to_thread(query_market_ranking, set_domain, want_num, sort_type)
+        return json.dumps(result, ensure_ascii=False)
+
+    @filter.llm_tool(name="query_financials")
+    async def tool_query_financials(self, event: AstrMessageEvent, code: str, market: str = "CN") -> str:
+        """获取股票三大财务报表：资产负债表、利润表、现金流量表，用于基本面分析。
+
+        Args:
+            code(string): 股票代码，A股6位数字，港股如0700.HK
+            market(string): 市场类型，CN表示A股，HK表示港股，默认CN
+        """
+        from .data_sources.financial_data import (
+            query_a_stock_balance_sheet, query_a_stock_income_statement,
+            query_a_stock_cash_flow, query_hk_stock_balance_sheet,
+            query_hk_stock_income_statement, query_hk_stock_cash_flow,
+        )
+        clean = code
+        for s in ('.HK', '.SH', '.SZ', '.BJ'):
+            clean = clean.replace(s, '')
+        if market == "HK":
+            bs, inc, cf = await asyncio.gather(
+                asyncio.to_thread(query_hk_stock_balance_sheet, clean),
+                asyncio.to_thread(query_hk_stock_income_statement, clean),
+                asyncio.to_thread(query_hk_stock_cash_flow, clean),
+                return_exceptions=True,
+            )
+        else:
+            mkt = "SH" if code.startswith(('6', '9', '5')) else "SZ"
+            bs, inc, cf = await asyncio.gather(
+                asyncio.to_thread(query_a_stock_balance_sheet, clean, mkt),
+                asyncio.to_thread(query_a_stock_income_statement, clean, mkt),
+                asyncio.to_thread(query_a_stock_cash_flow, clean, mkt),
+                return_exceptions=True,
+            )
+        return json.dumps({"balance_sheet": bs if not isinstance(bs, Exception) else str(bs),
+                           "income_statement": inc if not isinstance(inc, Exception) else str(inc),
+                           "cash_flow": cf if not isinstance(cf, Exception) else str(cf)}, ensure_ascii=False)
+
+    @filter.llm_tool(name="query_macro_data")
+    async def tool_query_macro_data(self, event: AstrMessageEvent, query: str) -> str:
+        """查询全球宏观经济指标，支持GDP、CPI、PMI、LPR、汇率、商品期货等数据。
+
+        Args:
+            query(string): 中文自然语言查询条件，如中国最新GDP增速、近三个月COMEX黄金走势
+        """
+        from .data_sources.macro_data import query_macro_data
+        result = await asyncio.to_thread(query_macro_data, query)
+        if isinstance(result, dict):
+            return result.get("content", "") or result.get("error", "宏观经济数据查询失败")
+        return str(result)
+
+    @filter.llm_tool(name="smart_stock_picking")
+    async def tool_smart_stock_picking(self, event: AstrMessageEvent, searchstring: str, searchtype: str = "stock") -> str:
+        """根据自然语言条件筛选股票，支持财务指标、技术指标、行业板块等多维度组合筛选。
+
+        Args:
+            searchstring(string): 中文自然语言筛选条件，如市盈率小于20的银行股、MACD金叉的科技股
+            searchtype(string): 资产类型，stock表示A股，fund表示基金，HK_stock表示港股，US_stock表示美股，默认stock
+        """
+        from .data_sources.stock_picking import smart_stock_picking
+        result = await asyncio.to_thread(smart_stock_picking, searchstring, searchtype)
+        return json.dumps(result, ensure_ascii=False)
+
+    # ================================================================
     # 命令: /股票分析 <code>
     # ================================================================
-    @filter.command("股票分析")
     async def analyze_stock(self, event: AstrMessageEvent) -> MessageEventResult:
         """启动完整多智能体分析流程。
 
