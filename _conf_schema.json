@@ -1,40 +1,19 @@
 {
-  "api_key": {
+  "gs_api_key": {
     "type": "string",
     "default": "",
-    "description": "LLM API Key",
-    "hint": "建议在 WebUI 插件配置中填写，不要写入代码仓库。",
+    "description": "国信证券 API Key（GS_API_KEY）。可从 https://www.guosen.com.cn/gs/xxskills/index.html 获取。留空则所有国信 API 工具不可用。",
     "obvious_hint": true
   },
-  "api_base": {
-    "type": "string",
-    "default": "https://open.bigmodel.cn/api/paas/v4",
-    "description": "LLM API 地址（OpenAI 兼容格式）"
-  },
-  "model": {
-    "type": "string",
-    "default": "glm-4-flash",
-    "description": "模型名称"
-  },
-  "reasoning": {
+  "export_pdf": {
     "type": "bool",
-    "default": false,
-    "description": "是否启用推理模式（适配支持该参数的 OpenAI 兼容模型）"
-  },
-  "timeout_seconds": {
-    "type": "int",
-    "default": 120,
-    "description": "LLM 单次调用超时时间（秒）。长文本分析建议 ≥ 120 秒"
+    "default": true,
+    "description": "是否导出 PDF 报告。关闭后将以 Markdown 分模块逐段发送。注意：需要安装系统依赖（libglib2.0-0、libpango、libcairo2 等），否则将自动降级为 TXT 文本导出。"
   },
   "default_market": {
     "type": "string",
     "default": "AUTO",
     "description": "默认市场",
     "options": ["AUTO", "CN", "HK", "US"]
-  },
-  "export_pdf": {
-    "type": "bool",
-    "default": true,
-    "description": "是否导出 PDF 报告。关闭后将分模块逐段发送 Markdown 报告，不生成文件附件。注意：需要安装系统依赖（libglib2.0-0、libpango、libcairo2 等），否则将自动降级为 TXT 文本导出。"
   }
 }
