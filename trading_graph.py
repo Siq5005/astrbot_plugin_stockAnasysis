@@ -323,12 +323,14 @@ async def node_risk_judge(state: AgentState, context, umo: str) -> AgentState:
         "综合以上分析，给出：\n"
         "1. 投资建议（买入/持有/卖出，三选一）\n"
         "2. 核心理由（3条，每条一行，格式：• [理由]，20字以内）\n"
-        "3. 主要风险（1条，格式：• [风险]，20字以内）\n"
+        "3. 仓位建议（轻仓/中等/重仓三选一，一句话说明理由）\n"
+        "4. 主要风险（1条，格式：• [风险]，20字以内）\n"
+        "判断仓位时综合考虑：趋势确定性、估值安全边际、波动率、宏观风险。"
         "不要其他内容，直接按格式输出。"
     )
     state.verdict = await _llm_ask(
         context, umo, prompt,
-        system_prompt="你是资深风险评估专家，直接给出结论，不写前言和标题。"
+        system_prompt="你是资深投资顾问，直接给出结论和建议仓位，不写前言和标题。"
     )
     return state
 
