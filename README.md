@@ -2,30 +2,27 @@
 
 [![License](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-%E2%89%A53.9-green.svg)](https://python.org)
-[![AstrBot](https://img.shields.io/badge/AstrBot-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
+[![AstrBot](https://img.shields.io/badge/AstrBot-%E2%89%A54.14-Plugin-orange.svg)](https://github.com/AstrBotDevs/AstrBot)
+[![Version](https://img.shields.io/badge/Version-2.0.0-brightgreen.svg)]()
 
-基于多智能体辩论架构的 AstrBot 金融分析插件，支持 A 股、港股、美股的智能分析报告生成。
+基于 **国信证券 API + AstrBot SubAgent** 的多智能体金融分析插件，支持 A 股、港股、美股的智能分析报告生成和自然语言选股。
 
 > 💡 本项目灵感来源于 [TradingAgents](https://github.com/TauricResearch/TradingAgents) 和 [TradingAgents-CN](https://github.com/hsliuping/TradingAgents-CN)，感谢这两个优秀框架提供的多智能体辩论思路与架构设计。
+>
+> **v2.0 大重构**：数据源升级为国信证券官方 API（4 个 Skill），编排引擎用 AstrBot SubAgent 替代 LangGraph，依赖从 9 个大幅简化至 2 个。
 
 ## ✨ 功能特性
 
-### 已经实现
-
-- 🔍 **智能股票分析** — 输入股票代码或名称，生成完整的分析报告
+- 🔍 **智能股票分析** — 输入股票代码或名称，生成完整的多智能体分析报告
 - ⚡ **快速分析模式** — 跳过多空辩论，更快生成分析报告（`/快速分析`）
-- 📊 **ETF 支持** — 支持 A 股 ETF 基金分析，自动识别 ETF 代码并使用基金专用数据接口
-- 🤖 **多智能体架构** — 基于 LangGraph 编排市场分析师、基本面分析师、新闻分析师
-- ⚖️ **多空辩论机制** — 多方研究员与空方研究员进行投资辩论，碰撞观点
-- 🛡️ **风险评估裁判** — 风险裁判综合评估整体投资风险等级
-- 🔄 **多数据源容灾** — 东方财富数据源不可用时自动降级到腾讯财经接口
+- 🔎 **自然语言选股** — 用中文描述条件即可筛选股票（`/选股 市盈率小于20的银行股`）
+- 🌍 **宏观经济查询** — 内置全球宏观经济数据（GDP/CPI/PMI/汇率/商品期货等）
+- 📊 **财报深度分析** — A股/H股资产负债表、利润表、现金流量表（PE/PB/ROE/ROA 等核心指标）
+- 🤖 **多智能体协作** — 7 个专业子智能体并行分析（市场/基本面/新闻/多方/空方/辩论主管/风险评估）
+- ⚖️ **多空辩论机制** — 多方与空方研究员独立研究，研究主管综合辩论
+- 🛡️ **风险评估裁判** — 综合评估整体投资风险等级
+- 📄 **PDF/TXT 报告导出** — 支持 PDF 附件（需系统依赖）或 Markdown 分模块发送
 - 📱 **移动端支持** — 在移动设备上也能查看分析报告
-
-### 待实现
-
-- 🌐 **多市场支持** — A 股（沪深）、港股、美股全覆盖
-- 📊 **多数据源** — akshare（A 股/港股/美股实时行情）+ yfinance（港股/美股基本面与新闻）
-- 🧠 **多模型结合** — 结合多厂商模型分析结果
 
 ## 📋 报告示例
 
@@ -37,118 +34,152 @@
 
 ## 🔧 安装
 
-在 AstrBot 插件市场搜索 `tradingassistant` 安装，或手动将本仓库克隆到 `AstrBot/data/plugins/` 目录：
+### 1. 安装插件
+
+在 AstrBot 插件市场搜索 `tradingassistant` 安装，或手动克隆：
 
 ```bash
-git clone https://github.com/YYY7C/TradingAgents-AstrBot.git
+git clone https://github.com/YYY7C/TradingAgents-AstrBot.git AstrBot/data/plugins/tradingagents
 ```
+
+### 2. 安装依赖
+
+```bash
+pip install markdown weasyprint
+```
+
+> 国信 API 数据源使用纯 Python stdlib，零额外依赖。PDF 导出需要系统依赖（`libglib2.0-0`、`libpango`、`libcairo2` 等），否则将自动降级为 TXT。
+
+### 3. 获取国信 API Key
+
+访问 [https://www.guosen.com.cn/gs/xxskills/index.html](https://www.guosen.com.cn/gs/xxskills/index.html) 注册获取 API Key（免费）。
 
 ## ⚙️ 配置
 
-安装后在 AstrBot WebUI 的插件配置页面填写以下信息：
+### 插件配置（WebUI）
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| `api_key` | OpenAI 兼容 API Key（必填） | — |
-| `api_base` | API 地址 | `https://open.bigmodel.cn/api/paas/v4` |
-| `model` | 模型名称 | `glm-4-flash` |
-| `reasoning` | 是否启用推理模式 | `false` |
-| `timeout_seconds` | LLM 单次调用超时（秒） | `120` |
+| `gs_api_key` | 国信证券 API Key（必填） | — |
+| `export_pdf` | 是否导出 PDF 报告 | `true` |
 | `default_market` | 默认市场 | `AUTO` |
-| `export_pdf` | 是否导出 PDF 报告，关闭后分模块发送 | `true` |
 
-> 支持 OpenAI 兼容协议的各种模型（智谱 GLM、DeepSeek、OpenAI、MiniMax 等）。推荐使用支持 Function Calling 的模型以获得最佳效果。
+### 环境变量
+
+```bash
+export GS_API_KEY="你的国信API密钥"
+```
+
+### SubAgent 编排配置（WebUI → SubAgent 编排）
+
+v2.0 的核心是 **AstrBot SubAgent 多智能体协作**，需要在 WebUI 中创建 7 个子智能体：
+
+| 子智能体 | Agent Name | 分配工具 | Persona 文件 |
+|----------|-----------|---------|-------------|
+| 市场技术面分析师 | `market_analyst` | K线、实时行情、资金流向、涨跌排名 | [market_analyst.md](subagent_personas/market_analyst.md) |
+| 基本面分析师 | `fundamentals_analyst` | 财务报表、实时行情 | [fundamentals_analyst.md](subagent_personas/fundamentals_analyst.md) |
+| 新闻宏观分析师 | `news_analyst` | 宏观经济、实时行情、资金流向 | [news_analyst.md](subagent_personas/news_analyst.md) |
+| 多方研究员 | `bull_researcher` | K线、实时行情、资金流向 | [bull_researcher.md](subagent_personas/bull_researcher.md) |
+| 空方研究员 | `bear_researcher` | K线、实时行情、资金流向 | [bear_researcher.md](subagent_personas/bear_researcher.md) |
+| 研究主管 | `research_manager` | 无工具（纯综合） | [research_manager.md](subagent_personas/research_manager.md) |
+| 风险评估官 | `risk_judge` | K线、实时行情、资金流向、宏观经济 | [risk_judge.md](subagent_personas/risk_judge.md) |
+
+创建每个子智能体时：
+1. 填写 Agent Name（自动生成 `transfer_to_*` 工具）
+2. 在 Persona 编辑器中粘贴对应 `.md` 文件的全部内容
+3. 在工具分配中选择对应的工具组
+4. Description 填写一句话说明（如"负责股票技术面分析，可调用行情和K线数据"）
+
+> 详细工具分组参考 [astrbot_tools.py](astrbot_tools.py) 的 `TOOL_GROUPS`。
 
 ## 📖 使用方法
 
 | 命令 | 说明 | 示例 |
 |------|------|------|
-| `/股票分析 <代码或名称>` | 生成完整分析报告（含多空辩论） | `/股票分析 000001` |
-| `/快速分析 <代码或名称>` | 快速分析（跳过多空辩论，速度更快） | `/快速分析 平安银行` |
-| `/股票 <代码或名称>` | 快捷分析（同 `/股票分析`） | `/股票 平安银行` |
+| `/股票分析 <代码或名称>` | 完整多智能体分析（含多空辩论） | `/股票分析 000001` |
+| `/快速分析 <代码或名称>` | 快速分析（跳过多空辩论） | `/快速分析 平安银行` |
+| `/股票 <代码或名称>` | 快捷分析（同 `/股票分析`） | `/股票 AAPL` |
+| `/选股 <条件>` | 自然语言智能选股 | `/选股 市盈率小于20的银行股` |
 | `/查股 <代码>` | 查询股票基本信息 | `/查股 AAPL` |
-| `/年报 <代码>` | 生成股票报告 | `/年报 600000` |
 | `/帮助` | 显示帮助信息 | `/帮助` |
 
 ### 支持的股票格式
 
-- **A 股**: `000001`、`600000`、`平安银行`
-- **港股**: `0700.HK`、`腾讯`
+- **A 股**: `000001`、`600519`、`平安银行`
+- **港股**: `0700.HK`、`腾讯控股`
 - **美股**: `AAPL`、`TSLA`、`NVDA`
 
-### ETF 支持
-
-本插件支持 A 股 ETF（交易所交易基金）的智能分析，自动识别 ETF 代码并调用专用的基金数据接口。
-
-**支持的 ETF 类型：**
-
-| 交易所 | 代码前缀 | 示例 | 说明 |
-|--------|----------|------|------|
-| 上海 | `510xxx` | 510300（沪深300ETF） | 跨境/宽基 ETF |
-| 上海 | `511xxx` | 511010（国泰上证5年期国债ETF） | 国债 ETF |
-| 上海 | `512xxx` | 512010（医药ETF） | 行业/主题 ETF |
-| 上海 | `513xxx` | 513100（纳指ETF） | 跨境 ETF |
-| 上海 | `515xxx` | 515050（5GETF） | 行业/主题 ETF |
-| 上海 | `56xxxx` | 560150（中证2000ETF） | 宽基 ETF |
-| 上海 | `58xxxx` | 588000（科创50ETF） | 科创板 ETF |
-| 深圳 | `159xxx` | 159915（创业板ETF） | 跨境/宽基 ETF |
-| 深圳 | `150xxx` | 150019（银华锐进） | 分级基金 |
-| 深圳 | `16xxxx` | 160105（南方积极配置） | LOF 基金 |
-
-**使用示例：**
+### 选股示例
 
 ```
-/快速分析 510300        → 沪深300ETF华泰柏瑞
-/股票分析 512010        → 医药ETF
-/快速分析 513100        → 纳指ETF
-/股票 159915            → 创业板ETF
+/选股 市盈率小于20的银行股
+/选股 MACD金叉且成交量放大的科技股
+/选股 净利润增长大于30%的医药股
+/选股 近20日涨幅大于10%且市值大于500亿
 ```
-
-> 💡 输入 ETF 代码（6位数字）即可自动识别，插件会自动区分 ETF 与普通股票，并使用基金专用数据接口获取行情。
 
 ## 🏗️ 技术架构
 
+### v2.0 架构（当前）
+
 ```
-用户输入
+用户命令 (/股票分析 000001)
     │
-    ├──→ 📊 市场分析师（Market Analyst）
-    │         分析技术指标、价格走势、成交量
-    │
-    ├──→ 📈 基本面分析师（Fundamentals Analyst）
-    │         分析财务数据、估值指标、盈利能力
-    │
-    ├──→ 📰 新闻分析师（News Analyst）
-    │         分析相关新闻、舆情、市场情绪
-    │
-    │   ┌─── 完整模式（/股票分析）───────────────────┐
-    │   │                                           │
-    ├──→ ⚖️ 多空辩论                                │
-    │         ├── 🐂 多方研究员（Bull Researcher）    │
-    │         └── 🐻 空方研究员（Bear Researcher）    │
-    │         └→ 研究主管（Research Manager）汇总     │
-    │                                           │
-    │   └─── 快速模式（/快速分析）跳过此阶段 ──────────┘
-    │
-    └──→ 🛡️ 风险裁判（Risk Judge）
-              综合评估 → 生成最终报告
+    └──→ 主智能体（TradingAgents-AstrBot）
+            │
+            ├── 数据收集（国信 API 工具）
+            │     ├── tool_query_historical_kline  → 国信行情 API
+            │     ├── tool_query_single_quote     → 国信行情 API
+            │     ├── tool_query_fund_flow        → 国信行情 API
+            │     ├── tool_query_financials        → 国信财报 API
+            │     └── tool_query_macro_data       → 国信宏观 API
+            │
+            ├── 并行调度（AstrBot SubAgent）
+            │     ├── transfer_to_market_analyst       → 📊 技术面分析
+            │     ├── transfer_to_fundamentals_analyst → 📈 基本面分析
+            │     └── transfer_to_news_analyst         → 📰 宏观/情绪分析
+            │
+            ├── 多空辩论（并行）
+            │     ├── transfer_to_bull_researcher → 🐂 多方研究
+            │     └── transfer_to_bear_researcher → 🐻 空方研究
+            │
+            ├── transfer_to_research_manager → ⚖️ 辩论综合
+            │
+            ├── transfer_to_risk_judge → 🛡️ 风险评估
+            │
+            └── 汇总 → 📄 最终分析报告（PDF/TXT/Markdown）
+```
+
+### 数据源架构
+
+```
+data_sources/              # 国信 API 数据源包
+├── http_client.py         # 共享 HTTP 层（urllib + curl 降级，宽松 SSL）
+├── market_data.py         # 行情 API（6 端点）
+├── financial_data.py      # 财报 API（6 端点）
+├── macro_data.py          # 宏观 API（1 端点，自然语言查询）
+└── stock_picking.py       # 选股 API（1 端点，自然语言筛选）
+
+所有模块纯 Python stdlib，零第三方依赖。
+API Base: https://dgzt.guosen.com.cn/skills
+认证: GS_API_KEY 环境变量 + apiKey 查询参数
 ```
 
 ## 📦 依赖
 
-- `aiohttp` — 异步 HTTP 客户端
-- `akshare` — A 股/港股数据源
-- `yfinance` — 美股数据源
-- `langgraph` — 多智能体编排框架
-- `langchain-core` — LangChain 核心
-- `curl-cffi` — TLS 指纹模拟（反爬虫）
-- `openai` — OpenAI 兼容 API 客户端
+| 依赖 | 用途 | 备注 |
+|------|------|------|
+| `markdown` | Markdown→HTML 转换 | PDF 导出依赖 |
+| `weasyprint` | HTML→PDF 渲染 | 需系统依赖 |
+
+国信 API 调用层使用纯 Python stdlib（`urllib` + `subprocess`），无任何第三方依赖。
 
 ## 🙏 致谢
 
-- **[TradingAgents](https://github.com/TauricResearch/TradingAgents)** — 提供了多智能体辩论的原始架构与核心思路
-- **[TradingAgents-CN](https://github.com/hsliuping/TradingAgents-CN)** — 提供了中文本地化改进与 A 股适配方案
-- **[AstrBot](https://github.com/AstrBotDevs/AstrBot)** — 优秀的Agent框架
-
+- **[AstrBot](https://github.com/AstrBotDevs/AstrBot)** — 优秀的 Agent 框架，SubAgent 功能让多智能体协作成为可能
+- **[国信证券](https://www.guosen.com.cn/gs/xxskills/index.html)** — 提供官方金融数据 API 服务
+- **[TradingAgents](https://github.com/TauricResearch/TradingAgents)** — 提供多智能体辩论的原始架构与核心思路
+- **[TradingAgents-CN](https://github.com/hsliuping/TradingAgents-CN)** — 提供中文本地化改进与 A 股适配方案
 
 ## ⚠️ 免责声明
 
