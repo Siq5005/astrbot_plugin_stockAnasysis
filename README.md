@@ -46,8 +46,10 @@
 在 AstrBot 插件市场搜索 `tradingassistant` 安装，或手动克隆：
 
 ```bash
-git clone https://github.com/Siq5005/astrbot_plugin_stockAnasysis.git AstrBot/data/plugins/stockanalysis
+git clone https://github.com/Siq5005/astrbot_plugin_stockAnasysis.git AstrBot/data/plugins/astrbot_plugin_stockanalysis
 ```
+
+> ⚠️ **重要**：AstrBot 要求插件目录名与 `metadata.yaml` 的 `name` 字段一致，且全部小写。必须克隆到 `astrbot_plugin_stockanalysis` 目录中，否则 AstrBot 会提示"找不到 metadata.yaml"。
 
 ### 2. 安装依赖
 
