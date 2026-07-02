@@ -160,16 +160,39 @@ async def node_data_collect(state: AgentState, context, umo: str) -> AgentState:
 # 分析师节点 —— 并行执行（asyncio.gather 在 parallel_analysts 中调用）
 # ============================================================
 
+def _market_hints(market_info: dict) -> str:
+    """根据市场返回技术面/基本面/宏观面的分析要点。"""
+    name = market_info.get("market_name", "")
+    is_hk = market_info.get("is_hk", False)
+    is_us = not market_info.get("is_china", True) and not is_hk
+
+    if is_hk:
+        return (
+            "港股特有要点：关注南向资金流向、港元联系汇率影响、港股通持仓变化、"
+            "与A股折溢价水平、做空比率。"
+        )
+    if is_us:
+        return (
+            "美股特有要点：关注美联储政策预期、美元指数、VIX恐慌指数、"
+            "科技/非农数据、机构持仓变化、财报季影响。"
+        )
+    return (
+        "A股特有要点：关注北向资金（沪深股通）流向、两融余额、"
+        "涨跌停板限制、政策面驱动、板块轮动节奏。"
+    )
+
+
 async def node_market_analyst(state: AgentState, context, umo: str) -> str:
     """技术面分析师：分析K线、均线、资金流向。"""
+    hints = _market_hints(state.market_info)
     prompt = (
-        f"股票: {state.stock_name}（{state.ticker}），市场: {state.market_info.get('market_name','')}\n\n"
-        f"历史K线数据:\n{state.kline_data[:1500]}\n\n"
+        f"股票: {state.stock_name}（{state.ticker}），{state.market_info.get('market_name','')}\n\n"
+        f"K线数据:\n{state.kline_data[:1500]}\n\n"
         f"实时行情:\n{state.quote_data[:500]}\n\n"
         f"资金流向:\n{state.fund_flow_data[:800]}\n\n"
-        "请从技术面角度给出3-5条关键结论，每条一行，格式：• [结论]。"
-        "重点：趋势方向、均线信号、支撑压力位、技术指标（MACD/KDJ/RSI）、建议（买入/持有/卖出）。"
-        "不要长篇大论，每条结论控制在20字以内。"
+        f"{hints}\n\n"
+        "从技术面给出3-5条关键结论，每条一行格式：• [结论]。"
+        "涵盖：趋势方向、均线信号、支撑压力、MACD/KDJ/RSI信号。每条20字以内。"
     )
     return await _llm_ask(
         context, umo, prompt,
@@ -179,13 +202,14 @@ async def node_market_analyst(state: AgentState, context, umo: str) -> str:
 
 async def node_fundamentals_analyst(state: AgentState, context, umo: str) -> str:
     """基本面分析师：分析财报数据。"""
+    hints = _market_hints(state.market_info)
     prompt = (
-        f"股票: {state.stock_name}（{state.ticker}），市场: {state.market_info.get('market_name','')}\n\n"
+        f"股票: {state.stock_name}（{state.ticker}），{state.market_info.get('market_name','')}\n\n"
         f"财务报表:\n{state.financials_data[:2000]}\n\n"
-        f"实时行情（含市盈率/市净率）:\n{state.quote_data[:500]}\n\n"
-        "请从基本面角度给出3-5条关键结论，每条一行，格式：• [结论]。"
-        "重点：PE/PB估值、ROE/毛利率/净利率、营收利润增长、资产负债、是否高估/低估。"
-        "不要长篇大论，每条结论控制在20字以内。"
+        f"估值快照:\n{state.quote_data[:500]}\n\n"
+        f"{hints}\n\n"
+        "从基本面给出3-5条关键结论，每条一行格式：• [结论]。"
+        "涵盖：PE/PB估值分位、ROE/毛利率/净利率、营收利润增速、资产负债质量。每条20字以内。"
     )
     return await _llm_ask(
         context, umo, prompt,
@@ -195,13 +219,14 @@ async def node_fundamentals_analyst(state: AgentState, context, umo: str) -> str
 
 async def node_news_analyst(state: AgentState, context, umo: str) -> str:
     """宏观/情绪分析师：分析宏观经济和资金情绪。"""
+    hints = _market_hints(state.market_info)
     prompt = (
-        f"股票: {state.stock_name}（{state.ticker}），市场: {state.market_info.get('market_name','')}\n\n"
+        f"股票: {state.stock_name}（{state.ticker}），{state.market_info.get('market_name','')}\n\n"
         f"宏观经济数据:\n{state.macro_data[:1500]}\n\n"
         f"资金流向:\n{state.fund_flow_data[:800]}\n\n"
-        "请从宏观/情绪面给出3-5条关键结论，每条一行，格式：• [结论]。"
-        "重点：宏观环境是否有利、行业政策、市场情绪、主力资金方向。"
-        "不要长篇大论，每条结论控制在20字以内。"
+        f"{hints}\n\n"
+        "从宏观/情绪面给出3-5条关键结论，每条一行格式：• [结论]。"
+        "涵盖：宏观环境、行业政策、市场情绪、主力资金方向。每条20字以内。"
     )
     return await _llm_ask(
         context, umo, prompt,

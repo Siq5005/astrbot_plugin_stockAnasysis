@@ -87,11 +87,17 @@ def _curl_request(url: str) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+import time as _time
+
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 0.5
+
+
 def make_request(url: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    """发送 HTTP GET 请求：urllib 优先，curl 降级。
+    """发送 HTTP GET 请求：urllib 优先，curl 降级，指数退避重试。
 
     自动注入 softName 和 apiKey 参数（如果调用方未提供）。
-    等同于 4 个参考 skill 中的 _make_request() 实现。
+    等同于 4 个参考 skill 中的 _make_request() 实现 + 重试增强。
 
     Args:
         url: 完整 API 端点 URL
@@ -100,27 +106,40 @@ def make_request(url: str, params: Dict[str, Any]) -> Dict[str, Any]:
     Returns:
         API 响应的 JSON 字典
     """
-    # 自动注入公共参数
     if "softName" not in params:
         params["softName"] = SOFT_NAME
     if "apiKey" not in params:
         params["apiKey"] = get_api_key()
 
-    try:
-        query_string = urlencode(params)
-        full_url = f"{url}?{query_string}"
+    # urllib 重试（指数退避）
+    for attempt in range(_MAX_RETRIES):
+        try:
+            query_string = urlencode(params)
+            full_url = f"{url}?{query_string}"
+            ssl_ctx = _create_ssl_context()
+            req = urllib_request.Request(full_url)
+            if ssl_ctx:
+                with urllib_request.urlopen(req, context=ssl_ctx, timeout=TIMEOUT_SECONDS) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            else:
+                with urllib_request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+        except (urllib_error.HTTPError, urllib_error.URLError):
+            if attempt < _MAX_RETRIES - 1:
+                _time.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
+        except Exception:
+            if attempt < _MAX_RETRIES - 1:
+                _time.sleep(_RETRY_BASE_DELAY * (2 ** attempt))
 
-        ssl_ctx = _create_ssl_context()
-        req = urllib_request.Request(full_url)
-        if ssl_ctx:
-            with urllib_request.urlopen(req, context=ssl_ctx, timeout=TIMEOUT_SECONDS) as response:
-                return json.loads(response.read().decode("utf-8"))
-        else:
-            with urllib_request.urlopen(req, timeout=TIMEOUT_SECONDS) as response:
-                return json.loads(response.read().decode("utf-8"))
-    except (urllib_error.HTTPError, urllib_error.URLError, Exception):
-        full_url = f"{url}?{urlencode(params)}"
-        return _curl_request(full_url)
+    # curl 降级（重试 1 次）
+    full_url = f"{url}?{urlencode(params)}"
+    for attempt in range(2):
+        result = _curl_request(full_url)
+        if "error" not in result or attempt == 1:
+            return result
+        _time.sleep(0.5)
+
+    return _curl_request(full_url)
 
 
 def is_available() -> bool:
