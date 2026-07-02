@@ -190,31 +190,19 @@ class TradingAssistantPlugin(Star):
         """
         arg = self._extract_command_arg(event.message_str, ["股票分析", "股票"])
         if not arg:
-            yield event.plain_result(
-                "请提供股票代码或名称。\n"
-                "用法: /股票分析 <代码>\n"
-                "示例: /股票分析 000001\n"
-                "      /股票分析 平安银行\n"
-                "      /股票分析 AAPL"
-            )
+            yield event.plain_result("要分析哪只股票？发代码或者名字给我(・ω・)")
             return
 
         ticker = arg.strip()
 
-        # 名称解析
         if self._needs_ticker_resolution(ticker):
-            yield event.plain_result(f"🔍 正在解析「{ticker}」...")
             resolved = await self._resolve_stock_name(ticker, event)
             if not resolved:
-                yield event.plain_result(f"❌ 无法识别「{ticker}」，请提供有效的股票代码。")
+                yield event.plain_result(f"「{ticker}」找不到捏，换个代码试试？")
                 return
-            yield event.plain_result(f"🔍 已识别「{ticker}」→ {resolved}")
             ticker = resolved
 
-        yield event.plain_result(
-            f"📊 开始分析「{ticker}」...\n"
-            f"⏳ 三位分析师并行 + 多空辩论，预计 30-60 秒..."
-        )
+        yield event.plain_result(f"好嘞，帮你查「{ticker}」，稍等一下下～")
 
         async for result in self._run_graph(event, ticker, quick_mode=False):
             yield result
@@ -237,18 +225,18 @@ class TradingAssistantPlugin(Star):
         """快速分析 —— 跳过多空辩论，直接汇总。"""
         arg = self._extract_command_arg(event.message_str, ["快速分析"])
         if not arg:
-            yield event.plain_result("请提供股票代码。用法: /快速分析 <代码>")
+            yield event.plain_result("要快速看哪只？发代码给我(°ω°)")
             return
 
         ticker = arg.strip()
         if self._needs_ticker_resolution(ticker):
             resolved = await self._resolve_stock_name(ticker, event)
             if not resolved:
-                yield event.plain_result(f"❌ 无法识别「{ticker}」")
+                yield event.plain_result(f"「{ticker}」找不到，换个代码试试")
                 return
             ticker = resolved
 
-        yield event.plain_result(f"⚡ 快速分析「{ticker}」（跳过多空辩论）...")
+        yield event.plain_result(f"快速模式帮你看「{ticker}」，马上好～")
 
         async for result in self._run_graph(event, ticker, quick_mode=True):
             yield result
@@ -261,27 +249,16 @@ class TradingAssistantPlugin(Star):
         """智能选股 —— 调用国信选股 API。"""
         arg = self._extract_command_arg(event.message_str, ["选股"])
         if not arg:
-            yield event.plain_result(
-                "请提供选股条件。\n"
-                "用法: /选股 <自然语言条件>\n"
-                "示例: /选股 市盈率小于20的银行股\n"
-                "      /选股 MACD金叉且成交量放大的科技股\n"
-                "      /选股 净利润增长大于30%的医药股"
-            )
+            yield event.plain_result("说说你想选什么类型的股票？( •̀ ω •́ )✧")
             return
 
         condition = arg.strip()
-        yield event.plain_result(f"🔍 正在筛选：{condition}...")
+        yield event.plain_result(f"帮你找「{condition}」，稍等～")
 
         prompt = (
-            f"请使用 tool_smart_stock_picking 工具进行智能选股。\n\n"
-            f"筛选条件：{condition}\n"
-            f"市场类型：stock（A股）\n\n"
-            f"将结果以清晰的表格形式呈现给用户。"
-            f"如果结果为空，告知用户未找到匹配的股票并建议放宽条件。\n\n"
-            f"最后必须附加风险提示：\n"
-            f"「⚠️ 以上结果由智能选股系统生成，仅供参考，不构成投资建议。\n"
-            f"市场有风险，投资需谨慎。」"
+            f"用 smart_stock_picking 工具帮用户筛选：{condition}，市场类型stock。"
+            f"结果用表格列出来，没找到就说一声并建议换个条件。"
+            f"最后加一句：以上结果仅供参考，不构成投资建议，入市需谨慎哦。"
         )
         yield event.request_llm(prompt)
 
@@ -301,32 +278,27 @@ class TradingAssistantPlugin(Star):
             if self._needs_ticker_resolution(ticker):
                 resolved = await self._resolve_stock_name(ticker, event)
                 if resolved is None:
-                    yield event.plain_result(f"❌ 无法识别「{ticker}」对应的股票。")
+                    yield event.plain_result(f"「{ticker}」找不到，换个名字试试？")
                     return
-                yield event.plain_result(f"🔍 已识别「{ticker}」→ {resolved}")
                 ticker = resolved
 
             market_info = StockUtils.get_market_info(ticker)
             if market_info.get('resolution_failed'):
-                yield event.plain_result(f"❌ {market_info['resolution_message']}")
+                yield event.plain_result(f"这个代码查不到捏(・_・?)")
                 return
 
             normalized = market_info['normalized_ticker']
             stock_name = StockUtils.get_stock_name(ticker)
 
-            info_text = (
-                f"**股票信息**\n\n"
-                f"股票名称: {stock_name}\n"
-                f"股票代码: {normalized}\n"
-                f"所属市场: {market_info['market_name']}\n"
-                f"交易所: {market_info['exchange']}\n"
-                f"计价货币: {market_info['currency_name']}（{market_info['currency_symbol']}）\n"
+            yield event.plain_result(
+                f"{stock_name}（{normalized}）"
+                f"，{market_info['market_name']}，{market_info['exchange']}"
+                f"，计价货币{market_info['currency_name']}"
             )
-            yield event.plain_result(info_text)
 
         except Exception as e:
             logger.error(f"股票查询失败: {e}", exc_info=True)
-            yield event.plain_result("查询服务暂时不可用，请稍后重试。")
+            yield event.plain_result("查询炸了，再试一次？")
 
     # ================================================================
     # 命令: /帮助
@@ -334,30 +306,15 @@ class TradingAssistantPlugin(Star):
     @filter.command("帮助")
     async def show_help(self, event: AstrMessageEvent) -> MessageEventResult:
         """显示帮助信息。"""
-        help_text = (
-            "📊 **astrbot_plugin_stockAnasysis v2.0**\n\n"
-            "**支持斜杠命令和自然语言两种方式：**\n\n"
-            "1. **股票分析** — 完整多智能体分析（含多空辩论）\n"
-            "   命令: /股票分析 <代码或名称>\n"
-            "   自然语言: \"分析一下平安银行\"、\"茅台怎么样\"\n\n"
-            "2. **快速分析** — 快速分析（跳过多空辩论）\n"
-            "   命令: /快速分析 <代码或名称>\n"
-            "   自然语言: \"快速看看腾讯\"、\"简单分析下AAPL\"\n\n"
-            "3. **智能选股** — 自然语言条件筛选股票\n"
-            "   命令: /选股 <条件>\n"
-            "   自然语言: \"筛选市盈率小于20的银行股\"、\"有没有股息率高的蓝筹股\"\n\n"
-            "4. **股票信息** — 查询股票基本信息\n"
-            "   命令: /查股 <代码或名称>\n"
-            "   自然语言: \"宁德时代是什么股票\"、\"AAPL代码是多少\"\n\n"
-            "**支持市场:**\n"
-            "- A股 (如: 000001, 600000, 平安银行)\n"
-            "- 港股 (如: 0700.HK, 腾讯)\n"
-            "- 美股 (如: AAPL, TSLA, NVDA)\n\n"
-            "**数据来源:** 国信证券官方 API\n"
-            "**架构:** AstrBot SubAgent 多智能体协作\n"
-            "**风险提示:** 分析结果仅供参考，不构成投资建议。"
+        yield event.plain_result(
+            "我能帮你看股票哦～\n\n"
+            "• /股票分析 000001 — 完整分析（含多空辩论）\n"
+            "• /快速分析 AAPL — 快速看一下\n"
+            "• /选股 市盈率小于20的银行股 — 帮你筛\n"
+            "• /查股 茅台 — 查代码和市场\n\n"
+            "直接说「分析一下茅台」「快速看看腾讯」也可以(・ω・)\n"
+            "数据来自国信证券，仅供参考，不构成投资建议～"
         )
-        yield event.plain_result(help_text)
 
     # ================================================================
     # 自然语言入口：直接交给主智能体处理
@@ -377,21 +334,15 @@ class TradingAssistantPlugin(Star):
         logger.info(f"[NL] 收到自然语言: {msg[:80]}")
 
         yield event.request_llm(
-            "用户通过自然语言发来一条消息：「" + msg + "」\n\n"
-            "请根据用户意图，使用对应的工具或子智能体来处理：\n"
-            "- 如果是想分析某只股票（含 分析/看看/怎么样/能买吗 等关键词），"
-            "请调用 query_historical_kline / query_financials 获取数据，"
-            "然后调度 market_analyst / fundamentals_analyst / news_analyst 三个子智能体，"
-            "接着走 bull_researcher / bear_researcher / research_manager 多空辩论，"
-            "最后用 risk_judge 评估风险，汇总生成完整分析报告。\n"
-            "- 如果是想快速了解（含 快速/简单/速览 等关键词），"
-            "跳过多空辩论，直接分析师->风险评估->汇总。\n"
-            "- 如果是想筛选股票（含 选/筛选/找/推荐/有没有 等关键词），"
-            "请调用 smart_stock_picking 工具。\n"
-            "- 如果是查询股票基本信息（含 是什么/代码/属于哪个市场 等关键词），"
-            "请调用 query_single_quote 工具查询后回复。\n"
-            "- 如果是问功能或帮助，请展示可用命令和示例。\n"
-            "- 如果和股票/金融完全无关，请友好告知用户你的能力范围。"
+            "用户说：「" + msg + "」\n\n"
+            "判断用户想做什么，用对应工具处理：\n"
+            "- 分析股票（分析/看看/怎么样/能买吗等）→ 调用 query_historical_kline/query_financials 获取数据，"
+            "再用 query_single_quote/query_fund_flow/query_macro_data 补充，最终给出买卖建议和理由\n"
+            "- 快速看（快速/简单/速览）→ 只调数据工具，跳过多空辩论\n"
+            "- 选股（选/筛选/找/推荐/有没有）→ 调用 smart_stock_picking\n"
+            "- 查代码/市场 → 调用 query_single_quote 查询后回答\n"
+            "- 问功能或帮助 → 简单介绍一下能做什么\n"
+            "- 和股票金融无关 → 自然回应即可"
         )
 
     # ================================================================
@@ -417,7 +368,7 @@ class TradingAssistantPlugin(Star):
             yield event.plain_result(result)
         except Exception as e:
             logger.error(f"[TradingGraph] 分析失败: {e}", exc_info=True)
-            yield event.plain_result(f"❌ 分析失败：{e}")
+            yield event.plain_result(f"分析炸了orz，再试一次？（{e}）")
 
     @staticmethod
     def _extract_command_arg(message_str: str, command_names: list) -> str:

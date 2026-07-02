@@ -355,20 +355,20 @@ class TradingGraph:
         )
 
         # Step 1: 数据收集
-        await self._notify("📡 正在获取国信数据...")
+        await self._notify("稍等，帮你去拉数据(・ω・)...")
         state = await node_data_collect(state, self.context, self.umo)
 
         # Step 2: 三位分析师并行
-        await self._notify("🔍 技术面 / 基本面 / 宏观面分析中...")
+        await self._notify("数据到手了，三位分析师同时看一下～")
         state = await node_parallel_analysts(state, self.context, self.umo)
 
         # Step 3: 多空辩论（完整模式）
         if not quick_mode:
-            await self._notify("⚖️ 多空辩论中...")
+            await self._notify("多空辩论开始了...")
             state = await node_parallel_debate(state, self.context, self.umo)
 
         # Step 4: 风险评估 + 最终建议
-        await self._notify("📊 综合评估中...")
+        await self._notify("综合一下，马上出结论(°ω°)")
         state = await node_risk_judge(state, self.context, self.umo)
 
         # 格式化最终输出
