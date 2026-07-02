@@ -8,3 +8,25 @@
 
 所有 API 共用同一个 base URL 和认证方式。
 """
+
+from .http_client import make_request, is_available, get_api_key
+
+# 行情
+from .market_data import (
+    query_single_quote, query_combined_quotes, query_fund_flow,
+    query_market_ranking, query_related_sectors, query_historical_kline,
+    get_set_code, SET_CODE_MAP, SET_DOMAIN_MAP,
+)
+
+# 财报
+from .financial_data import (
+    query_a_stock_balance_sheet, query_a_stock_income_statement,
+    query_a_stock_cash_flow, query_hk_stock_balance_sheet,
+    query_hk_stock_income_statement, query_hk_stock_cash_flow,
+)
+
+# 宏观
+from .macro_data import query_macro_data
+
+# 选股
+from .stock_picking import smart_stock_picking
