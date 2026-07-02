@@ -557,6 +557,86 @@ class TradingAssistantPlugin(Star):
             yield event.plain_result("查询炸了，再试一次？")
 
     # ================================================================
+    # 命令: /回测 — 历史回测
+    # ================================================================
+    @filter.command("回测")
+    async def backtest_cmd(self, event: AstrMessageEvent) -> MessageEventResult:
+        """历史策略回测。"""
+        arg = self._extract_command_arg(event.message_str, ["回测"])
+        if not arg:
+            yield event.plain_result(
+                "用法: /回测 <代码> --strategy <策略名>\n"
+                "策略: macd(金叉死叉) / ma(MA5穿MA20) / rsi(超买超卖) / kdj(金叉死叉)\n"
+                "示例: /回测 000001 --strategy macd"
+            )
+            return
+
+        import re
+        parts = arg.strip().split()
+        code = parts[0]
+        strategy = "macd"
+        for i, p in enumerate(parts):
+            if p == "--strategy" and i + 1 < len(parts):
+                strategy = parts[i + 1]
+
+        if self._needs_ticker_resolution(code):
+            resolved = await self._resolve_stock_name(code, event)
+            if not resolved:
+                yield event.plain_result(f"「{code}」找不到捏")
+                return
+            code = resolved
+
+        yield event.plain_result(f"跑回测中（{code}，{strategy}策略）...")
+
+        from .backtest_engine import run_backtest, format_backtest, STRATEGIES
+        from .data_sources.market_data import query_historical_kline, get_set_code
+
+        ticker = code.strip()
+        is_hk = ".HK" in ticker
+        is_us = ticker.isalpha() and not ticker.isdigit()
+        mkt = "HK" if is_hk else ("US" if is_us else "CN")
+        sc = get_set_code(ticker, mkt)
+        target = 3 if mkt in ("HK", "US") else 0
+        clean = ticker.replace(".HK", "").replace(".SH", "").replace(".SZ", "")
+
+        try:
+            raw = await asyncio.to_thread(query_historical_kline, clean, sc, 60, target)
+            result = run_backtest(raw, strategy)
+            name = StockUtils.get_stock_name(ticker)
+            yield event.plain_result(format_backtest(ticker, name, result))
+        except Exception as e:
+            yield event.plain_result(f"回测失败: {e}")
+
+    @filter.llm_tool(name="backtest_strategy")
+    async def tool_backtest(self, event: AstrMessageEvent, code: str, strategy: str = "macd") -> str:
+        """对股票历史数据运行策略回测，模拟买卖交易并计算收益率、胜率、最大回撤。
+
+        适用场景：用户想验证某个交易策略在历史数据上的表现时使用。
+
+        Args:
+            code(string): 股票代码
+            strategy(string): 策略名，macd=MACD金叉死叉，ma=MA5穿MA20，rsi=RSI超买超卖，kdj=KDJ金叉死叉，默认macd
+        """
+        from .backtest_engine import run_backtest, format_backtest
+        from .data_sources.market_data import query_historical_kline, get_set_code
+
+        ticker = code.strip()
+        is_hk = ".HK" in ticker
+        is_us = ticker.isalpha() and not ticker.isdigit()
+        mkt = "HK" if is_hk else ("US" if is_us else "CN")
+        sc = get_set_code(ticker, mkt)
+        target = 3 if mkt in ("HK", "US") else 0
+        clean = ticker.replace(".HK", "").replace(".SH", "").replace(".SZ", "")
+
+        try:
+            raw = await asyncio.to_thread(query_historical_kline, clean, sc, 60, target)
+            result = run_backtest(raw, strategy)
+            name = StockUtils.get_stock_name(ticker)
+            return format_backtest(ticker, name, result)
+        except Exception as e:
+            return f"回测失败: {e}"
+
+    # ================================================================
     # 命令: /帮助
     # ================================================================
     @filter.command("帮助")
