@@ -1,4 +1,4 @@
-# TradingAgents-AstrBot 📈
+# astrbot_plugin_stockAnasysis 📈
 
 [![License](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-%E2%89%A53.9-green.svg)](https://python.org)
@@ -7,9 +7,15 @@
 
 基于 **国信证券 API + AstrBot SubAgent** 的多智能体金融分析插件，支持 A 股、港股、美股的智能分析报告生成和自然语言选股。
 
-> 💡 本项目灵感来源于 [TradingAgents](https://github.com/TauricResearch/TradingAgents) 和 [TradingAgents-CN](https://github.com/hsliuping/TradingAgents-CN)，感谢这两个优秀框架提供的多智能体辩论思路与架构设计。
+> 📌 **Fork 自 [TradingAgents-AstrBot](https://github.com/YYY7C/TradingAgents-AstrBot)**（作者 [YYY7C](https://github.com/YYY7C)），感谢原项目的优秀工作。
 >
-> **v2.0 大重构**：数据源升级为国信证券官方 API（4 个 Skill），编排引擎用 AstrBot SubAgent 替代 LangGraph，依赖从 9 个大幅简化至 2 个。
+> 💡 原项目灵感来源于 [TradingAgents](https://github.com/TauricResearch/TradingAgents) 和 [TradingAgents-CN](https://github.com/hsliuping/TradingAgents-CN) 的多智能体辩论架构。
+>
+> **v2.0 大重构**（本仓库）：
+> - 数据源：akshare/yfinance → 国信证券官方 API（4 个 Skill，纯 stdlib）
+> - 编排引擎：LangGraph → AstrBot SubAgent 原生框架
+> - 依赖简化：9 个 → 2 个，零爬取依赖
+> - 新增：`/选股` 命令、宏观经济数据、财报深度分析
 
 ## ✨ 功能特性
 
@@ -176,10 +182,11 @@ API Base: https://dgzt.guosen.com.cn/skills
 
 ## 🙏 致谢
 
+- **[TradingAgents-AstrBot](https://github.com/YYY7C/TradingAgents-AstrBot)**（作者 [YYY7C](https://github.com/YYY7C)）— 本项目 Fork 来源，提供了 v1.x 的完整插件框架
 - **[AstrBot](https://github.com/AstrBotDevs/AstrBot)** — 优秀的 Agent 框架，SubAgent 功能让多智能体协作成为可能
 - **[国信证券](https://www.guosen.com.cn/gs/xxskills/index.html)** — 提供官方金融数据 API 服务
-- **[TradingAgents](https://github.com/TauricResearch/TradingAgents)** — 提供多智能体辩论的原始架构与核心思路
-- **[TradingAgents-CN](https://github.com/hsliuping/TradingAgents-CN)** — 提供中文本地化改进与 A 股适配方案
+- **[TradingAgents](https://github.com/TauricResearch/TradingAgents)** — 多智能体辩论的原始架构与核心思路
+- **[TradingAgents-CN](https://github.com/hsliuping/TradingAgents-CN)** — 中文本地化改进与 A 股适配方案
 
 ## ⚠️ 免责声明
 
