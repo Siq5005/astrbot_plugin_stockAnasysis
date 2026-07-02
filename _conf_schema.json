@@ -2,18 +2,7 @@
   "gs_api_key": {
     "type": "string",
     "default": "",
-    "description": "国信证券 API Key（GS_API_KEY）。可从 https://www.guosen.com.cn/gs/xxskills/index.html 获取。留空则所有国信 API 工具不可用。",
+    "description": "国信证券 API Key（GS_API_KEY）。留空则所有国信 API 工具不可用。",
     "obvious_hint": true
-  },
-  "export_pdf": {
-    "type": "bool",
-    "default": true,
-    "description": "是否导出 PDF 报告。关闭后将以 Markdown 分模块逐段发送。注意：需要安装系统依赖（libglib2.0-0、libpango、libcairo2 等），否则将自动降级为 TXT 文本导出。"
-  },
-  "default_market": {
-    "type": "string",
-    "default": "AUTO",
-    "description": "默认市场",
-    "options": ["AUTO", "CN", "HK", "US"]
   }
 }

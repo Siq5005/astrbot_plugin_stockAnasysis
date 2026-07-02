@@ -1,4 +1,1 @@
-# PDF 导出
-markdown>=3.5
-weasyprint>=60.0
-# 注意: 国信 API 数据源使用纯 Python stdlib，零额外依赖
+# 国信 API 数据源使用纯 Python stdlib，零额外依赖

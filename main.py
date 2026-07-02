@@ -14,19 +14,12 @@
 - 交互：支持斜杠命令和自然语言，LLM 意图识别自动路由
 """
 import asyncio
-import os
-import re
-from datetime import datetime
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.star import Context, Star, register
 
 from .utils.stock_utils import StockUtils
-from .utils.report_utils import (
-    extract_conclusion, save_report_pdf, save_report_md,
-    save_report_txt, check_pdf_available,
-)
 from .data_sources.http_client import is_available as guosen_available
 
 # ============================================================
@@ -41,19 +34,6 @@ class TradingAssistantPlugin(Star):
         super().__init__(context)
         logger.info("TradingAssistantPlugin v2.0 初始化中...")
         self.config = config or {}
-
-        # PDF 相关
-        self._pdf_available, self._pdf_unavailable_reason = check_pdf_available()
-        self.export_pdf = self.config.get('export_pdf', True)
-        self._export_txt = False
-
-        if not self._pdf_available and self.export_pdf:
-            self._export_txt = True
-            logger.warning(
-                f"weasyprint 系统依赖缺失，PDF 导出不可用"
-                f"（{self._pdf_unavailable_reason}），已自动降级为 TXT。"
-            )
-            self.export_pdf = False
 
         if not guosen_available():
             logger.warning(
@@ -455,20 +435,6 @@ class TradingAssistantPlugin(Star):
         """判断是否需要名称→代码解析。"""
         return not StockUtils.is_valid_stock_code(ticker)
 
-    @staticmethod
-    def split_report_by_sections(report: str) -> list[str]:
-        """将 Markdown 报告按 ## 标题拆分为多个段落。"""
-        parts = re.split(r'\n(?=## )', report)
-        sections = []
-        for part in parts:
-            text = part.strip()
-            if not text:
-                continue
-            if sections and not text.startswith('#'):
-                continue
-            sections.append(text)
-        return sections
-
     async def _resolve_stock_name(self, raw_input: str,
                                   event: AstrMessageEvent = None) -> str | None:
         """解析股票名称 → 代码（本地查找，A股优先）。"""
@@ -483,21 +449,14 @@ class TradingAssistantPlugin(Star):
 
     def _build_analysis_prompt(self, ticker: str, stock_name: str,
                                market_info: dict, quick_mode: bool = False) -> str:
-        """构建主智能体的分析编排提示词。
-
-        主智能体使用此提示词指导 AstrBot SubAgent 框架：
-        - 调用 transfer_to_* 工具将任务分配给子智能体
-        - 子智能体各自调用国信 API 工具获取数据
-        - 主智能体收集结果并汇总报告
-        """
+        """构建简洁投资建议提示词 —— 只输出买卖结论和原因。"""
         market = market_info.get('market_name', '未知')
         exchange = market_info.get('exchange', '未知')
         currency = market_info.get('currency_name', 'CNY')
-        now = datetime.now().strftime('%Y-%m-%d %H:%M')
 
-        prompt = f"""# 股票分析任务
+        prompt = f"""# 投资建议任务
 
-请对以下股票进行全面的投资分析，生成完整的分析报告。
+对 {stock_name}（{ticker}）给出简洁的投资建议。
 
 ## 股票信息
 - 股票名称: {stock_name}
@@ -507,70 +466,46 @@ class TradingAssistantPlugin(Star):
 
 ## 执行步骤
 
-### 第一步：数据收集（并行）
-使用以下工具同时获取基础数据：
-- tool_query_historical_kline(code="{ticker}", days=60) —— 历史K线和均线
-- tool_query_single_quote(code="{ticker}") —— 实时行情
-- tool_query_fund_flow(code="{ticker}", period=30) —— 资金流向
-- tool_query_financials(code="{ticker}") —— 财务报表
-- tool_query_macro_data(query="中国最新PMI CPI 货币政策 行业政策") —— 宏观背景
+### 1. 收集数据（并行调用以下工具）
+- query_historical_kline(code="{ticker}", days=60)
+- query_single_quote(code="{ticker}")
+- query_fund_flow(code="{ticker}", period=30)
+- query_financials(code="{ticker}")
+- query_macro_data(query="中国最新PMI CPI 货币政策")
 
-### 第二步：并行调度子智能体分析
-数据收集完成后，**同时**将以下三个任务分配给子智能体（可并行执行）：
+### 2. 分析（并行调度子智能体）
+同时调用，每个子智能体只需输出3-5条关键结论，不要长篇报告：
 
-1. transfer_to_market_analyst("请对 {stock_name}（{ticker}）进行技术面分析。市场: {market}，货币: {currency}。请先调用工具获取K线和实时行情数据，然后按格式输出分析报告。")
-
-2. transfer_to_fundamentals_analyst("请对 {stock_name}（{ticker}）进行基本面分析。市场: {market}。请先调用工具获取财报数据，提取PE/PB/ROE/毛利率/净利率等关键指标，然后按格式输出分析报告。")
-
-3. transfer_to_news_analyst("请对 {stock_name}（{ticker}）进行宏观和情绪面分析。市场: {market}。请先调用工具获取宏观经济数据和资金流向，评估市场情绪，然后按格式输出分析报告。")
-
-以上三个子智能体**必须同时并行**调度，等待全部完成后继续。
+transfer_to_market_analyst("简要分析{stock_name}({ticker})技术面，只输出3-5条关键结论，格式：趋势方向/均线状态/关键支撑压力/技术信号")
+transfer_to_fundamentals_analyst("简要分析{stock_name}({ticker})基本面，只输出PE/PB/ROE/毛利率/净利率等3-5个核心指标和结论")
+transfer_to_news_analyst("简要分析{stock_name}({ticker})宏观情绪面，只输出3-5条关键宏观因素和市场情绪判断")
 """
 
         if not quick_mode:
-            prompt += f"""
-### 第三步：多空辩论（并行）
-分析师报告完成后，**同时**调度多方和空方研究员：
-
-4. transfer_to_bull_researcher("请基于以下三份分析报告，深度挖掘 {stock_name}（{ticker}）的利好因素。市场: {market}。\n\n=== 市场技术面分析 ===\n{{{{market_analysis}}}}\n\n=== 基本面分析 ===\n{{{{fundamentals_analysis}}}}\n\n=== 新闻宏观分析 ===\n{{{{news_analysis}}}}")
-
-5. transfer_to_bear_researcher("请基于以下三份分析报告，深度挖掘 {stock_name}（{ticker}）的利空因素。市场: {market}。\n\n=== 市场技术面分析 ===\n{{{{market_analysis}}}}\n\n=== 基本面分析 ===\n{{{{fundamentals_analysis}}}}\n\n=== 新闻宏观分析 ===\n{{{{news_analysis}}}}")
-
-多方和空方**同时并行**调度，等待全部完成后继续。
-
-### 第四步：辩论综合
-6. transfer_to_research_manager("请综合多方和空方的研究报告，生成 {stock_name}（{ticker}）的辩论综合报告。市场: {market}。\n\n=== 多方研究报告 ===\n{{{{bull_report}}}}\n\n=== 空方研究报告 ===\n{{{{bear_report}}}}")
-"""
-        else:
             prompt += """
-### 第三步：快速评估（跳过多空辩论）
-本次为快速分析模式，跳过多空辩论环节，直接进行风险评估。
+### 3. 多空观点
+同时调用：
+transfer_to_bull_researcher("基于三份简析，列出{stock_name}的3个最核心利好")
+transfer_to_bear_researcher("基于三份简析，列出{stock_name}的3个最核心利空")
 """
 
         prompt += f"""
-### 最后一步：风险评估
-7. transfer_to_risk_judge("请综合所有分析报告，对 {stock_name}（{ticker}）进行最终风险评估。市场: {market}。请给出明确的风险等级和投资建议。\n\n=== 分析汇总 ===\n{{{{all_analysis}}}}")
+### 4. 汇总输出（你自己总结，不要再调用子智能体）
 
-### 最终步骤：汇总报告
-所有子智能体完成后，请汇总结果，生成完整的投资分析报告。
+基于以上分析，用以下格式直接回复用户（纯文本，不用Markdown标题）：
 
-报告格式：
+📊 {stock_name}（{ticker}）
 
-# {stock_name}（{ticker}）投资分析报告
+建议：🔴买入 / 🟡持有 / 🟢卖出（三选一）
 
-> 分析时间: {now}
-> 市场: {market}（{exchange}）
-> 数据来源: 国信证券官方 API
+核心理由：
+• xxx
+• xxx
+• xxx
 
----
+主要风险：
+• xxx
 
-[逐段呈现各子智能体的分析结果，保持原有格式]
-
----
-
-## ⚠️ 免责声明
-
-本报告由 AI 多智能体系统自动生成，仅供参考，不构成投资建议。
-市场有风险，投资需谨慎。投资者应独立做出投资决策并承担相应风险。
+⚠️ 以上为AI分析，仅供参考，不构成投资建议。
 """
         return prompt
