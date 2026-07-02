@@ -83,7 +83,7 @@ async def _llm_ask(context, umo: str, prompt: str, system_prompt: str = "") -> s
             prompt=prompt,
             system_prompt=system_prompt if system_prompt else None,
         )
-        return resp.result_message or ""
+        return (resp.completion_text or "") if resp else ""
     except Exception as e:
         logger.error(f"[TradingGraph] LLM 调用失败: {e}")
         return f"❌ LLM 调用失败: {e}"
