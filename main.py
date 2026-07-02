@@ -22,7 +22,7 @@ from .utils.stock_utils import StockUtils
 from .data_sources.http_client import is_available as guosen_available
 
 
-@register("astrbot_plugin_stockanalysis", "Coe", "基于国信API的多智能体金融分析插件", "v2.0.0")
+@register("astrbot_plugin_stockanalysis", "Coe", "基于国信API + LangGraph 的多智能体金融分析插件", "v2.0.0")
 class TradingAssistantPlugin(Star):
     """金融助手插件 —— 国信API + SubAgent 架构"""
 
@@ -39,7 +39,7 @@ class TradingAssistantPlugin(Star):
 
         logger.info("TradingAssistantPlugin v2.0 初始化完成（国信API + SubAgent 架构）")
 
-    def terminate(self):
+    async def terminate(self):
         """插件卸载时清理资源。"""
         logger.info("TradingAssistantPlugin v2.0 已卸载")
 
@@ -314,35 +314,6 @@ class TradingAssistantPlugin(Star):
             "• /查股 茅台 — 查代码和市场\n\n"
             "直接说「分析一下茅台」「快速看看腾讯」也可以(・ω・)\n"
             "数据来自国信证券，仅供参考，不构成投资建议～"
-        )
-
-    # ================================================================
-    # 自然语言入口：直接交给主智能体处理
-    # ================================================================
-    @filter.regex(r"^[^/].+")  # 匹配不以 / 开头的消息（自然语言）
-    async def handle_natural_language(self, event: AstrMessageEvent) -> MessageEventResult:
-        """处理自然语言输入。
-
-        不自行做意图识别，而是把消息交给 AstrBot 主智能体。
-        主智能体拥有全部工具（query_single_quote / smart_stock_picking 等）
-        和 SubAgent transfer_to_* 能力，能自动判断用户意图并调用对应功能。
-        """
-        msg = event.message_str.strip()
-        if not msg or msg.startswith('/'):
-            return
-
-        logger.info(f"[NL] 收到自然语言: {msg[:80]}")
-
-        yield event.request_llm(
-            "用户说：「" + msg + "」\n\n"
-            "判断用户想做什么，用对应工具处理：\n"
-            "- 分析股票（分析/看看/怎么样/能买吗等）→ 调用 query_historical_kline/query_financials 获取数据，"
-            "再用 query_single_quote/query_fund_flow/query_macro_data 补充，最终给出买卖建议和理由\n"
-            "- 快速看（快速/简单/速览）→ 只调数据工具，跳过多空辩论\n"
-            "- 选股（选/筛选/找/推荐/有没有）→ 调用 smart_stock_picking\n"
-            "- 查代码/市场 → 调用 query_single_quote 查询后回答\n"
-            "- 问功能或帮助 → 简单介绍一下能做什么\n"
-            "- 和股票金融无关 → 自然回应即可"
         )
 
     # ================================================================
