@@ -31,7 +31,9 @@ class TradingAssistantPlugin(Star):
         super().__init__(context)
         logger.info("TradingAssistantPlugin v2.0 初始化中...")
         self.config = config or {}
-        self._last_analysis = {}  # {code: {"verdict": "...", "detail": "..."}}
+        self._cache = {}  # {code: {"verdict": "...", "detail": "...", "ts": timestamp}}
+        self._cache_order = []  # FIFO 队列，最多保留 20 条
+        self._cache_max = 20
 
         if not guosen_available():
             logger.warning(
@@ -219,10 +221,17 @@ class TradingAssistantPlugin(Star):
                     verdict_line = line.strip()
                     break
 
-            # 缓存完整结果
-            self._last_analysis[ticker] = {
+            # 缓存完整结果（FIFO，最多 20 条）
+            import time
+            if ticker not in self._cache:
+                self._cache_order.append(ticker)
+                while len(self._cache_order) > self._cache_max:
+                    old = self._cache_order.pop(0)
+                    self._cache.pop(old, None)
+            self._cache[ticker] = {
                 "verdict": verdict_line,
                 "detail": full_result,
+                "ts": time.time(),
             }
             return verdict_line
         except Exception as e:
@@ -248,10 +257,12 @@ class TradingAssistantPlugin(Star):
             except Exception:
                 pass
 
-        cached = self._last_analysis.get(ticker)
+        import time
+        cached = self._cache.get(ticker)
         if cached and cached.get("detail"):
-            return cached["detail"]
-        return f"还没有「{ticker}」的分析记录，请先使用 analyze_stock 进行分析。"
+            if time.time() - cached.get("ts", 0) < 3600:
+                return cached["detail"]
+        return f"还没有「{ticker}」的近期分析记录，请先使用 analyze_stock 重新分析。"
 
     # ================================================================
     # 命令: /股票分析 <code>
