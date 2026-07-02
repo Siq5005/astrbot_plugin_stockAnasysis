@@ -330,6 +330,105 @@ class TradingAssistantPlugin(Star):
             yield event.plain_result(f"信号计算失败: {e}")
 
     # ================================================================
+    # 命令: /监控 — 自选股定时监控
+    # ================================================================
+    @filter.command("监控")
+    async def watchlist_cmd(self, event: AstrMessageEvent) -> MessageEventResult:
+        """自选股监控管理。"""
+        arg = self._extract_command_arg(event.message_str, ["监控"])
+        if not arg:
+            yield event.plain_result(
+                "用法:\n"
+                "  /监控 添加 000001 — 加入监控\n"
+                "  /监控 删除 000001 — 移除监控\n"
+                "  /监控 列表 — 查看监控列表\n"
+                "  /监控 检查 — 立即检查所有监控股"
+            )
+            return
+
+        import os
+        plugin_dir = os.path.dirname(__file__)
+        user_id = event.get_sender_id() or "default"
+        parts = arg.strip().split()
+        action = parts[0]
+        code = parts[1] if len(parts) > 1 else ""
+
+        if action == "添加" and code:
+            from .watchlist_manager import add_stock
+            if add_stock(plugin_dir, user_id, code):
+                yield event.plain_result(f"✅「{code}」已加入监控列表～")
+            else:
+                yield event.plain_result(f"「{code}」已经在监控列表里啦")
+
+        elif action == "删除" and code:
+            from .watchlist_manager import remove_stock
+            if remove_stock(plugin_dir, user_id, code):
+                yield event.plain_result(f"✅「{code}」已移出监控列表")
+            else:
+                yield event.plain_result(f"「{code}」不在监控列表里")
+
+        elif action == "列表":
+            from .watchlist_manager import list_stocks
+            stocks = list_stocks(plugin_dir, user_id)
+            if stocks:
+                yield event.plain_result(f"📋 监控列表：{'、'.join(stocks)}")
+            else:
+                yield event.plain_result("监控列表是空的，用 /监控 添加 <代码> 来加～")
+
+        elif action == "检查":
+            yield event.plain_result("开始检查监控股，稍等一下～")
+            async for r in self._check_watchlist(event):
+                yield r
+
+        else:
+            yield event.plain_result("用法: /监控 添加/删除/列表/检查")
+
+    async def _check_watchlist(self, event: AstrMessageEvent):
+        """检查所有监控股，推送变化的。"""
+        import os
+        from .watchlist_manager import get_all_watch_entries, update_history, get_last_verdict
+        from .trading_graph import TradingGraph
+
+        plugin_dir = os.path.dirname(__file__)
+        entries = get_all_watch_entries(plugin_dir)
+        user_id = event.get_sender_id() or "default"
+        entries = [e for e in entries if e["user_id"] == user_id]
+
+        if not entries:
+            yield event.plain_result("监控列表是空的～")
+            return
+
+        changed = []
+        umo = event.unified_msg_origin
+        for entry in entries:
+            code = entry["code"]
+            try:
+                graph = TradingGraph(self.context, umo, progress_callback=None)
+                result = await graph.analyze(code, quick_mode=True)
+                # 提取建议行
+                for line in result.split("\n"):
+                    if "建议" in line:
+                        new_verdict = line.strip()
+                        old = entry["last_verdict"]
+                        if new_verdict != old:
+                            changed.append((code, old, new_verdict))
+                        update_history(plugin_dir, user_id, code, new_verdict)
+                        break
+            except Exception as e:
+                logger.error(f"[监控] {code} 检查失败: {e}")
+
+        if changed:
+            msg = "📢 监控股信号变化：\n"
+            for code, old, new in changed:
+                if old:
+                    msg += f"  {code}: {old} → {new}\n"
+                else:
+                    msg += f"  {code}: {new}\n"
+            yield event.plain_result(msg)
+        else:
+            yield event.plain_result("监控股信号无变化～")
+
+    # ================================================================
     # 命令: /股票分析 <code>
     # ================================================================
     async def analyze_stock(self, event: AstrMessageEvent) -> MessageEventResult:
@@ -465,11 +564,13 @@ class TradingAssistantPlugin(Star):
         """显示帮助信息。"""
         yield event.plain_result(
             "我能帮你看股票哦～\n\n"
-            "• /股票分析 000001 — 完整分析（含多空辩论）\n"
+            "• /股票分析 000001 — 完整分析+买卖建议\n"
             "• /快速分析 AAPL — 快速看一下\n"
-            "• /选股 市盈率小于20的银行股 — 帮你筛\n"
-            "• /查股 茅台 — 查代码和市场\n\n"
-            "直接说「分析一下茅台」「快速看看腾讯」也可以(・ω・)\n"
+            "• /信号 000001 — 技术指标打分\n"
+            "• /选股 市盈率小于20 — 帮你筛\n"
+            "• /查股 茅台 — 查代码和市场\n"
+            "• /监控 添加/删除/列表 — 自选股管理\n\n"
+            "自然语言说「分析一下茅台」也可以(・ω・)\n"
             "数据来自国信证券，仅供参考，不构成投资建议～"
         )
 
