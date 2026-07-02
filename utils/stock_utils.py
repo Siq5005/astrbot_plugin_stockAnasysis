@@ -84,13 +84,17 @@ class StockUtils:
 
         # 2. 降级: 腾讯批量行情接口
         try:
-            import requests
+            from urllib import request as urllib_request
+            import ssl
+            ctx = ssl._create_unverified_context()
             for market in ('sh', 'sz'):
                 url = f'https://qt.gtimg.cn/q={market}a'
-                resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=30)
-                if resp.status_code != 200:
+                req = urllib_request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                resp = urllib_request.urlopen(req, timeout=30, context=ctx)
+                if resp.getcode() != 200:
                     continue
-                for line in resp.text.split(';'):
+                raw_text = resp.read().decode('gbk', errors='ignore')
+                for line in raw_text.split(';'):
                     line = line.strip()
                     if not line or '~' not in line:
                         continue
@@ -524,11 +528,15 @@ class StockUtils:
 
             # 腾讯接口兜底
             try:
-                import requests
+                from urllib import request as urllib_request
+                import ssl
+                ctx = ssl._create_unverified_context()
                 prefix = 'sh' if code.startswith(('6', '9', '5')) else 'sz'
                 url = f'https://qt.gtimg.cn/q={prefix}{code}'
-                resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-                parts = resp.text.split('~')
+                req = urllib_request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                resp = urllib_request.urlopen(req, timeout=10, context=ctx)
+                raw_text = resp.read().decode('gbk', errors='ignore')
+                parts = raw_text.split('~')
                 if len(parts) >= 2 and parts[1].strip():
                     return parts[1].strip()
             except Exception:

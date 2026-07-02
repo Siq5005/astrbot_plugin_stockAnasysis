@@ -48,7 +48,7 @@ async def test_imports():
         ("data_sources.macro_data", "query_macro_data"),
         ("data_sources.stock_picking", "smart_stock_picking"),
         # 工具注册层
-        ("astrbot_tools", "ALL_TOOLS, TOOL_GROUPS"),
+        ("astrbot_tools", "TOOL_GROUPS"),
         # Persona
         ("subagent_personas", "PERSONAS, load_persona"),
         # 保留工具
@@ -160,12 +160,13 @@ async def test_tools_and_personas():
     print("[4/5] 工具 + Persona 测试")
     print("=" * 60)
 
-    from astrbot_tools import ALL_TOOLS, TOOL_GROUPS
+    from astrbot_tools import TOOL_GROUPS
     from subagent_personas import PERSONAS, load_persona
 
-    print(f"  ✅ {len(ALL_TOOLS)} 个工具已注册")
+    unique = len(set(n for g in TOOL_GROUPS.values() for n in g.get('tool_names', [])))
+    print(f"  ✅ {unique} 个工具已注册（@filter.llm_tool）")
     for group_name, group_info in TOOL_GROUPS.items():
-        print(f"     • {group_name}: {len(group_info['tools'])} 工具")
+        print(f"     • {group_name}: {len(group_info['tool_names'])} 工具")
 
     print(f"  ✅ {len(PERSONAS)} 个 Persona 已定义")
     for name in PERSONAS:

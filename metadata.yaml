@@ -1,8 +1,8 @@
 name: astrbot_plugin_stockanalysis
 display_name: TradingAgents 金融助手
-version: 2.0.0
+desc: 基于国信API + AstrBot SubAgent 的多智能体金融分析插件（v2.0 大重构），支持 A 股、港股、美股的智能分析报告生成和自然语言选股。
+version: v2.0.0
 author: Coe
-description: 基于国信API + AstrBot SubAgent 的多智能体金融分析插件（v2.0 大重构），支持 A 股、港股、美股的智能分析报告生成和自然语言选股。
 repo: https://github.com/Siq5005/astrbot_plugin_stockAnasysis
 homepage: https://github.com/Siq5005/astrbot_plugin_stockAnasysis
 license: AGPL-3.0
