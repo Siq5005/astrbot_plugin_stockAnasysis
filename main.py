@@ -13,6 +13,7 @@
 - LLM：复用 AstrBot 内置模型（context.llm_generate），无需单独配置
 """
 import asyncio
+import json
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api import logger, AstrBotConfig
