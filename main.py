@@ -1,17 +1,16 @@
-"""AstrBot 金融助手插件入口 —— 国信 API + SubAgent 架构。
+"""AstrBot 金融助手插件入口 —— 国信 API + LangGraph 并行架构。
 
-命令（支持斜杠命令和自然语言两种方式）：
-- /股票分析 <code> 或 "分析一下XX" / "XX怎么样": 完整多智能体分析
-- /快速分析 <code> 或 "快速看看XX": 跳过多空辩论的快速分析
-- /选股 <条件> 或 "筛选XX的股票": 自然语言智能选股
-- /查股 <名称> 或 "XX是什么股票": 股票名称→代码解析
-- /帮助 或 "你能做什么": 显示帮助信息
+命令（支持斜杠命令和自然语言）：
+- /股票分析 <code>: 完整多智能体分析（含多空辩论）
+- /快速分析 <code>: 跳过多空辩论
+- /选股 <条件>: 自然语言智能选股
+- /查股 <名称>: 股票名称→代码解析
+- /帮助: 显示帮助信息
 
-架构说明：
-- 数据源：纯国信证券 API（4 个 skill），零第三方爬取依赖
-- 编排：AstrBot SubAgent 框架（主智能体 + 7 个子智能体并行协作）
-- 报告：Markdown/TXT/PDF 多格式输出
-- 交互：支持斜杠命令和自然语言，LLM 意图识别自动路由
+架构：
+- 数据：国信证券 API（4 个 skill，纯 stdlib）
+- 编排：LangGraph 并行图（三位分析师并行 + 多空并行）
+- LLM：复用 AstrBot 内置模型（context.llm_generate），无需单独配置
 """
 import asyncio
 
@@ -21,9 +20,6 @@ from astrbot.api.star import Context, Star, register
 
 from .utils.stock_utils import StockUtils
 from .data_sources.http_client import is_available as guosen_available
-
-# ============================================================
-# 自然语言意图识别 prompt
 
 
 @register("astrbot_plugin_stockanalysis", "Coe", "基于国信API的多智能体金融分析插件", "v2.0.0")
@@ -215,23 +211,13 @@ class TradingAssistantPlugin(Star):
             yield event.plain_result(f"🔍 已识别「{ticker}」→ {resolved}")
             ticker = resolved
 
-        market_info = StockUtils.get_market_info(ticker)
-        stock_name = StockUtils.get_stock_name(ticker)
-
         yield event.plain_result(
-            f"📊 开始分析 **{stock_name}**（{ticker}）\n"
-            f"市场: {market_info.get('market_name', 'N/A')}\n\n"
-            f"主智能体将调度以下子智能体并行工作：\n"
-            f"• 市场技术面分析师\n"
-            f"• 基本面分析师\n"
-            f"• 新闻宏观分析师\n"
-            f"• 多方/空方研究员\n\n"
-            f"⏳ 分析进行中，预计耗时 1-3 分钟..."
+            f"📊 开始分析「{ticker}」...\n"
+            f"⏳ 三位分析师并行 + 多空辩论，预计 30-60 秒..."
         )
 
-        # 构建主智能体的分析编排提示词，交给 AstrBot 框架执行
-        prompt = self._build_analysis_prompt(ticker, stock_name, market_info, quick_mode=False)
-        yield event.request_llm(prompt)
+        async for result in self._run_graph(event, ticker, quick_mode=False):
+            yield result
 
     @filter.command("股票")
     async def stock_command(self, event: AstrMessageEvent) -> MessageEventResult:
@@ -262,16 +248,10 @@ class TradingAssistantPlugin(Star):
                 return
             ticker = resolved
 
-        market_info = StockUtils.get_market_info(ticker)
-        stock_name = StockUtils.get_stock_name(ticker)
+        yield event.plain_result(f"⚡ 快速分析「{ticker}」（跳过多空辩论）...")
 
-        yield event.plain_result(
-            f"⚡ 快速分析模式：**{stock_name}**（{ticker}）\n"
-            f"跳过多空辩论，直接生成分析报告。预计 30-60 秒。"
-        )
-
-        prompt = self._build_analysis_prompt(ticker, stock_name, market_info, quick_mode=True)
-        yield event.request_llm(prompt)
+        async for result in self._run_graph(event, ticker, quick_mode=True):
+            yield result
 
     # ================================================================
     # 命令: /选股 <条件>
@@ -418,6 +398,27 @@ class TradingAssistantPlugin(Star):
     # 内部方法
     # ================================================================
 
+    async def _run_graph(self, event: AstrMessageEvent,
+                         ticker: str, quick_mode: bool = False):
+        """执行 LangGraph 分析流程，yield 结果给用户。"""
+        from .trading_graph import TradingGraph
+
+        umo = event.unified_msg_origin
+
+        async def progress(msg: str):
+            try:
+                await event.send(event.plain_result(msg))
+            except Exception:
+                pass
+
+        try:
+            graph = TradingGraph(self.context, umo, progress_callback=progress)
+            result = await graph.analyze(ticker, quick_mode=quick_mode)
+            yield event.plain_result(result)
+        except Exception as e:
+            logger.error(f"[TradingGraph] 分析失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 分析失败：{e}")
+
     @staticmethod
     def _extract_command_arg(message_str: str, command_names: list) -> str:
         """从消息中提取命令参数。"""
@@ -446,66 +447,3 @@ class TradingAssistantPlugin(Star):
         except Exception as e:
             logger.warning(f"本地名称解析异常: {e}")
         return None
-
-    def _build_analysis_prompt(self, ticker: str, stock_name: str,
-                               market_info: dict, quick_mode: bool = False) -> str:
-        """构建简洁投资建议提示词 —— 只输出买卖结论和原因。"""
-        market = market_info.get('market_name', '未知')
-        exchange = market_info.get('exchange', '未知')
-        currency = market_info.get('currency_name', 'CNY')
-
-        prompt = f"""# 投资建议任务
-
-对 {stock_name}（{ticker}）给出简洁的投资建议。
-
-## 股票信息
-- 股票名称: {stock_name}
-- 股票代码: {ticker}
-- 市场: {market}（{exchange}）
-- 货币: {currency}
-
-## 执行步骤
-
-### 1. 收集数据（并行调用以下工具）
-- query_historical_kline(code="{ticker}", days=60)
-- query_single_quote(code="{ticker}")
-- query_fund_flow(code="{ticker}", period=30)
-- query_financials(code="{ticker}")
-- query_macro_data(query="中国最新PMI CPI 货币政策")
-
-### 2. 分析（并行调度子智能体）
-同时调用，每个子智能体只需输出3-5条关键结论，不要长篇报告：
-
-transfer_to_market_analyst("简要分析{stock_name}({ticker})技术面，只输出3-5条关键结论，格式：趋势方向/均线状态/关键支撑压力/技术信号")
-transfer_to_fundamentals_analyst("简要分析{stock_name}({ticker})基本面，只输出PE/PB/ROE/毛利率/净利率等3-5个核心指标和结论")
-transfer_to_news_analyst("简要分析{stock_name}({ticker})宏观情绪面，只输出3-5条关键宏观因素和市场情绪判断")
-"""
-
-        if not quick_mode:
-            prompt += """
-### 3. 多空观点
-同时调用：
-transfer_to_bull_researcher("基于三份简析，列出{stock_name}的3个最核心利好")
-transfer_to_bear_researcher("基于三份简析，列出{stock_name}的3个最核心利空")
-"""
-
-        prompt += f"""
-### 4. 汇总输出（你自己总结，不要再调用子智能体）
-
-基于以上分析，用以下格式直接回复用户（纯文本，不用Markdown标题）：
-
-📊 {stock_name}（{ticker}）
-
-建议：🔴买入 / 🟡持有 / 🟢卖出（三选一）
-
-核心理由：
-• xxx
-• xxx
-• xxx
-
-主要风险：
-• xxx
-
-⚠️ 以上为AI分析，仅供参考，不构成投资建议。
-"""
-        return prompt

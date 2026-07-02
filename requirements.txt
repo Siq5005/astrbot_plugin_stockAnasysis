@@ -1,1 +1,2 @@
-# 国信 API 数据源使用纯 Python stdlib，零额外依赖
+langgraph>=0.2.0,<0.3
+langchain-core>=0.3.0,<0.4
