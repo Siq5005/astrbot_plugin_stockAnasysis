@@ -173,6 +173,37 @@ class TradingAssistantPlugin(Star):
         result = await asyncio.to_thread(smart_stock_picking, searchstring, searchtype)
         return json.dumps(result, ensure_ascii=False)
 
+    @filter.llm_tool(name="analyze_stock")
+    async def tool_analyze_stock(self, event: AstrMessageEvent, code: str, quick: bool = False) -> str:
+        """对股票进行完整的多智能体分析（含技术面、基本面、宏观面、多空辩论、风险评估），直接返回买卖建议。
+
+        这是最高层级的分析工具——当用户想分析某只股票时优先使用此工具，无需逐个调用底层数据工具。
+
+        Args:
+            code(string): 股票代码或名称，如000001、平安银行、AAPL、0700.HK
+            quick(boolean): 是否快速模式，false为完整分析含多空辩论，true为快速跳过辩论，默认false
+        """
+        from .trading_graph import TradingGraph
+
+        # 名称解析
+        ticker = code.strip()
+        if not StockUtils.is_valid_stock_code(ticker):
+            try:
+                resolved = StockUtils.resolve_stock_name(ticker)
+                if resolved:
+                    ticker = resolved
+            except Exception:
+                pass
+
+        try:
+            umo = event.unified_msg_origin
+            graph = TradingGraph(self.context, umo, progress_callback=None)
+            result = await graph.analyze(ticker, quick_mode=quick)
+            return result
+        except Exception as e:
+            logger.error(f"[analyze_stock] 分析失败: {e}", exc_info=True)
+            return f"分析失败: {e}"
+
     # ================================================================
     # 命令: /股票分析 <code>
     # ================================================================
