@@ -184,6 +184,8 @@ class TradingAssistantPlugin(Star):
             quick(boolean): 是否快速模式，false为完整分析含多空辩论，true为快速跳过辩论，默认false
         """
         from .trading_graph import TradingGraph
+        from astrbot.api.message_components import Plain
+        from astrbot.core.message.message_event_result import MessageChain
 
         # 名称解析
         ticker = code.strip()
@@ -195,9 +197,16 @@ class TradingAssistantPlugin(Star):
             except Exception:
                 pass
 
+        async def progress(msg: str):
+            try:
+                await event.send(MessageChain([Plain(msg)]))
+            except Exception:
+                pass
+
         try:
+            await progress(f"好嘞，帮你查「{ticker}」，稍等一下下～")
             umo = event.unified_msg_origin
-            graph = TradingGraph(self.context, umo, progress_callback=None)
+            graph = TradingGraph(self.context, umo, progress_callback=progress)
             result = await graph.analyze(ticker, quick_mode=quick)
             return result
         except Exception as e:
