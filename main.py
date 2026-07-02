@@ -1,17 +1,19 @@
 """AstrBot 金融助手插件入口 —— 国信 API + SubAgent 架构。
 
-命令：
-- /股票分析 <code>: 启动完整分析流程（主智能体编排子智能体）
-- /快速分析 <code>: 跳过多空辩论的快速分析
-- /选股 <条件>: 自然语言智能选股
-- /查股 <名称>: 股票名称→代码解析
-- /帮助: 显示帮助信息
+命令（支持斜杠命令和自然语言两种方式）：
+- /股票分析 <code> 或 "分析一下XX" / "XX怎么样": 完整多智能体分析
+- /快速分析 <code> 或 "快速看看XX": 跳过多空辩论的快速分析
+- /选股 <条件> 或 "筛选XX的股票": 自然语言智能选股
+- /查股 <名称> 或 "XX是什么股票": 股票名称→代码解析
+- /帮助 或 "你能做什么": 显示帮助信息
 
 架构说明：
 - 数据源：纯国信证券 API（4 个 skill），零第三方爬取依赖
 - 编排：AstrBot SubAgent 框架（主智能体 + 7 个子智能体并行协作）
 - 报告：Markdown/TXT/PDF 多格式输出
+- 交互：支持斜杠命令和自然语言，LLM 意图识别自动路由
 """
+import json
 import os
 import re
 from datetime import datetime
@@ -26,6 +28,41 @@ from .utils.report_utils import (
     save_report_txt, check_pdf_available,
 )
 from .data_sources.http_client import is_available as guosen_available
+
+# ============================================================
+# 自然语言意图识别 prompt
+# ============================================================
+_INTENT_CLASSIFY_PROMPT = """你是一个金融助手插件的意图识别器。分析用户输入，判断意图并提取参数。
+
+意图类型（intent）：
+- "analyze_stock": 用户想分析某只股票（完整分析，含多空辩论）
+  触发词: 分析、看看、怎么样、如何、好不好、能买吗、能不能买、值得吗、估值
+- "quick_analyze": 用户想快速看某只股票（简要分析即可）
+  触发词: 快速、简单、快看、速览
+- "pick_stocks": 用户描述条件想筛选股票
+  触发词: 选、筛选、找、推荐、有哪些、什么股、有没有
+- "lookup_stock": 用户询问某只股票的基本信息（代码、名称、属于哪个市场）
+  触发词: 是什么、代码、查、属于、哪个市场
+- "help": 用户询问助手的功能或帮助
+- "unknown": 无法识别意图
+
+参数提取（params）：
+- ticker: 股票代码或名称（如 000001、平安银行、AAPL、0700.HK）
+- condition: 选股条件（仅 pick_stocks 意图需要，如"市盈率小于20的银行股"）
+
+返回格式：严格按以下 JSON 格式，不要有其他文字:
+{"intent": "analyze_stock", "params": {"ticker": "平安银行"}}
+
+示例:
+输入: "帮我分析一下平安银行"        → {"intent": "analyze_stock", "params": {"ticker": "平安银行"}}
+输入: "茅台怎么样"                   → {"intent": "analyze_stock", "params": {"ticker": "茅台"}}
+输入: "快速看看腾讯"                 → {"intent": "quick_analyze", "params": {"ticker": "腾讯"}}
+输入: "筛选市盈率小于20的银行股"     → {"intent": "pick_stocks", "params": {"condition": "市盈率小于20的银行股"}}
+输入: "有没有股息率高的蓝筹股"      → {"intent": "pick_stocks", "params": {"condition": "股息率高的蓝筹股"}}
+输入: "宁德时代是什么股票"           → {"intent": "lookup_stock", "params": {"ticker": "宁德时代"}}
+输入: "AAPL代码是多少"               → {"intent": "lookup_stock", "params": {"ticker": "AAPL"}}
+输入: "你能做什么"                   → {"intent": "help", "params": {}}
+输入: "今天天气怎么样"               → {"intent": "unknown", "params": {}}"""
 
 
 class TradingAssistantPlugin(Star):
@@ -241,24 +278,20 @@ class TradingAssistantPlugin(Star):
     async def show_help(self, event: AstrMessageEvent) -> MessageEventResult:
         """显示帮助信息。"""
         help_text = (
-            "📊 **TradingAgents-AstrBot v2.0**\n\n"
-            "**可用命令：**\n\n"
+            "📊 **astrbot_plugin_stockAnasysis v2.0**\n\n"
+            "**支持斜杠命令和自然语言两种方式：**\n\n"
             "1. **股票分析** — 完整多智能体分析（含多空辩论）\n"
             "   命令: /股票分析 <代码或名称>\n"
-            "   示例: /股票分析 000001\n"
-            "         /股票分析 平安银行\n"
-            "         /股票分析 AAPL\n\n"
-            "2. **快速分析** — 快速分析（跳过多空辩论，速度更快）\n"
+            "   自然语言: \"分析一下平安银行\"、\"茅台怎么样\"\n\n"
+            "2. **快速分析** — 快速分析（跳过多空辩论）\n"
             "   命令: /快速分析 <代码或名称>\n"
-            "   示例: /快速分析 600519\n\n"
+            "   自然语言: \"快速看看腾讯\"、\"简单分析下AAPL\"\n\n"
             "3. **智能选股** — 自然语言条件筛选股票\n"
             "   命令: /选股 <条件>\n"
-            "   示例: /选股 市盈率小于20的银行股\n"
-            "         /选股 MACD金叉的科技股\n\n"
+            "   自然语言: \"筛选市盈率小于20的银行股\"、\"有没有股息率高的蓝筹股\"\n\n"
             "4. **股票信息** — 查询股票基本信息\n"
             "   命令: /查股 <代码或名称>\n"
-            "   示例: /查股 000001\n\n"
-            "5. **快捷命令** — /股票 <代码>（等同于/股票分析）\n\n"
+            "   自然语言: \"宁德时代是什么股票\"、\"AAPL代码是多少\"\n\n"
             "**支持市场:**\n"
             "- A股 (如: 000001, 600000, 平安银行)\n"
             "- 港股 (如: 0700.HK, 腾讯)\n"
@@ -268,6 +301,90 @@ class TradingAssistantPlugin(Star):
             "**风险提示:** 分析结果仅供参考，不构成投资建议。"
         )
         yield event.plain_result(help_text)
+
+    # ================================================================
+    # 自然语言入口：LLM 意图识别 + 自动路由
+    # ================================================================
+    @filter.unmatched
+    async def handle_natural_language(self, event: AstrMessageEvent) -> MessageEventResult:
+        """处理自然语言输入，LLM 意图识别后自动路由到对应的处理器。
+
+        触发条件：用户消息不匹配任何已注册的斜杠命令时自动调用。
+        支持的自然语言示例：
+        - "帮我分析一下平安银行" → analyze_stock
+        - "筛选市盈率小于20的银行股" → pick_stocks
+        - "茅台怎么样" → analyze_stock
+        - "宁德时代是什么股票" → lookup_stock
+        - "你能做什么" → help
+        """
+        msg = event.message_str.strip()
+        if not msg:
+            return
+
+        logger.info(f"[NL意图] 收到自然语言: {msg[:80]}")
+
+        # Step 1: LLM 意图分类
+        classify_prompt = _INTENT_CLASSIFY_PROMPT + f"\n\n用户输入: {msg}"
+        try:
+            raw = await self.context.call_llm(classify_prompt)
+            raw = raw.strip()
+            # 清理 markdown code block 包裹
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            intent_data = json.loads(raw.strip())
+            intent = intent_data.get("intent", "unknown")
+            params = intent_data.get("params", {})
+            logger.info(f"[NL意图] 识别: intent={intent}, params={params}")
+        except (json.JSONDecodeError, Exception) as e:
+            logger.warning(f"[NL意图] 意图识别失败: {e}, raw={raw[:200] if 'raw' in dir() else 'N/A'}")
+            return  # 无法识别时不响应，让其他插件或框架处理
+
+        # Step 2: 根据意图路由
+        if intent == "unknown":
+            return  # 不相关，静默忽略
+
+        if intent == "help":
+            async for result in self.show_help(event):
+                yield result
+            return
+
+        if intent == "pick_stocks":
+            condition = params.get("condition", "")
+            if condition:
+                # 构造伪命令消息触发选股流程
+                event.message_str = f"/选股 {condition}"
+                async for result in self.pick_stocks(event):
+                    yield result
+            return
+
+        # analyze_stock / quick_analyze / lookup_stock 都需要 ticker
+        ticker = params.get("ticker", "")
+        if not ticker:
+            yield event.plain_result("😕 请问您想看哪只股票？请提供股票代码或名称。")
+            return
+
+        if intent == "lookup_stock":
+            event.message_str = f"/查股 {ticker}"
+            async for result in self.lookup_stock(event):
+                yield result
+            return
+
+        if intent == "quick_analyze":
+            event.message_str = f"/快速分析 {ticker}"
+            async for result in self.quick_analyze(event):
+                yield result
+            return
+
+        if intent == "analyze_stock":
+            event.message_str = f"/股票分析 {ticker}"
+            async for result in self.analyze_stock(event):
+                yield result
+            return
+
+        # fallback
+        logger.info(f"[NL意图] 未处理的意图: {intent}")
 
     # ================================================================
     # 内部方法
