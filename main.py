@@ -303,9 +303,9 @@ class TradingAssistantPlugin(Star):
         yield event.plain_result(help_text)
 
     # ================================================================
-    # 自然语言入口：LLM 意图识别 + 自动路由
+    # 自然语言入口：regex 匹配 + LLM 意图识别 + 自动路由
     # ================================================================
-    @filter.unmatched
+    @filter.regex(r"^[^/].+")  # 匹配不以 / 开头的消息（自然语言）
     async def handle_natural_language(self, event: AstrMessageEvent) -> MessageEventResult:
         """处理自然语言输入，LLM 意图识别后自动路由到对应的处理器。
 
@@ -318,7 +318,7 @@ class TradingAssistantPlugin(Star):
         - "你能做什么" → help
         """
         msg = event.message_str.strip()
-        if not msg:
+        if not msg or msg.startswith('/'):
             return
 
         logger.info(f"[NL意图] 收到自然语言: {msg[:80]}")
