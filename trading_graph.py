@@ -44,6 +44,9 @@ class AgentState:
     bull_report: str = ""
     bear_report: str = ""
 
+    # 技术信号评分（data_collect 填充）
+    signal_score: dict = field(default_factory=dict)
+
     # 风险评估
     risk_assessment: str = ""
 
@@ -153,6 +156,15 @@ async def node_data_collect(state: AgentState, context, umo: str) -> AgentState:
         f"资产负债表:\n{_fmt(bs)}\n\n利润表:\n{_fmt(inc)}\n\n现金流量表:\n{_fmt(cf)}"
     )
     state.macro_data = _fmt(macro)
+
+    # 计算技术信号评分
+    try:
+        from .signal_calculator import calc_score
+        if not isinstance(kline, Exception) and isinstance(kline, dict):
+            state.signal_score = calc_score(kline)
+    except Exception:
+        pass
+
     return state
 
 
@@ -314,23 +326,36 @@ async def node_risk_judge(state: AgentState, context, umo: str) -> AgentState:
             f"利空因素:\n{state.bear_report}\n"
         )
 
+    # 技术信号评分摘要
+    signal_section = ""
+    if state.signal_score and state.signal_score.get("total", 0) > 0:
+        s = state.signal_score
+        signal_section = (
+            f"\n技术信号评分: {s.get('total', '?')}/100 {s.get('level', '')}\n"
+            f"MACD({s.get('macd',{}).get('score',0)}/30): {s.get('macd',{}).get('detail','')}\n"
+            f"均线({s.get('ma',{}).get('score',0)}/25): {s.get('ma',{}).get('detail','')}\n"
+            f"KDJ({s.get('kdj',{}).get('score',0)}/20): {s.get('kdj',{}).get('detail','')}\n"
+            f"RSI({s.get('rsi',{}).get('score',0)}/15): {s.get('rsi',{}).get('detail','')}\n"
+            f"量能({s.get('volume',{}).get('score',0)}/10): {s.get('volume',{}).get('detail','')}\n"
+        )
+
     prompt = (
         f"股票: {state.stock_name}（{state.ticker}）\n\n"
-        f"技术面:\n{state.market_analysis}\n\n"
-        f"基本面:\n{state.fundamentals_analysis}\n\n"
-        f"宏观面:\n{state.news_analysis}\n"
-        f"{debate_section}\n"
-        "综合以上分析，给出：\n"
+        f"技术面分析:\n{state.market_analysis}\n\n"
+        f"基本面分析:\n{state.fundamentals_analysis}\n\n"
+        f"宏观面分析:\n{state.news_analysis}\n"
+        f"{debate_section}"
+        f"{signal_section}\n"
+        "综合LLM分析和客观技术信号评分，给出：\n"
         "1. 投资建议（买入/持有/卖出，三选一）\n"
-        "2. 核心理由（3条，每条一行，格式：• [理由]，20字以内）\n"
-        "3. 仓位建议（轻仓/中等/重仓三选一，一句话说明理由）\n"
+        "2. 核心理由（3条，结合技术信号评分和LLM分析，每条一行，格式：• [理由]，20字以内）\n"
+        "3. 仓位建议（轻仓/中等/重仓三选一，参考信号评分：>65重仓、45-65中等、<45轻仓或观望）\n"
         "4. 主要风险（1条，格式：• [风险]，20字以内）\n"
-        "判断仓位时综合考虑：趋势确定性、估值安全边际、波动率、宏观风险。"
         "不要其他内容，直接按格式输出。"
     )
     state.verdict = await _llm_ask(
         context, umo, prompt,
-        system_prompt="你是资深投资顾问，直接给出结论和建议仓位，不写前言和标题。"
+        system_prompt="你是资深投资顾问，综合LLM分析和量化信号给出买卖建议，不写前言和标题。"
     )
     return state
 
