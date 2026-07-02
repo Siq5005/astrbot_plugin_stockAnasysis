@@ -1,11 +1,9 @@
 """AstrBot 工具注册 —— 将国信 API 包装为 LLM 可调用工具。
 
-每个工具包含:
-- 函数实现（调用 data_sources/ 模块）
-- 工具描述（LLM 用来理解何时调用）
-- 参数类型注解（LLM 用来正确传参）
+每个工具通过 @filter.llm_tool 装饰器注册到 AstrBot 框架，
+在 WebUI SubAgent 编排中可按需分配给子智能体。
 
-工具按用途分组，可在 WebUI SubAgent 编排中按需分配给子智能体：
+工具分组：
 - 行情工具 → 市场分析师、多空研究员
 - 财报工具 → 基本面分析师
 - 宏观工具 → 新闻/情绪分析师
@@ -14,12 +12,18 @@
 import asyncio
 import json
 import logging
-from typing import Optional
 
 try:
+    from astrbot.api.event import filter
     from astrbot.api import logger
 except ImportError:
     logger = logging.getLogger(__name__)
+    # 本地测试时的 mock
+    class _MockFilter:
+        @staticmethod
+        def llm_tool(func):
+            return func
+    filter = _MockFilter()
 
 
 # ============================================================
@@ -52,16 +56,11 @@ def _clean_code(code: str) -> str:
     return code
 
 
-def _get_market_info_for_code(code: str) -> dict:
-    """根据股票代码推断市场信息。"""
-    from .utils.stock_utils import StockUtils
-    return StockUtils.get_market_info(code)
-
-
 # ============================================================
 # 行情数据工具组
 # ============================================================
 
+@filter.llm_tool
 async def tool_query_single_quote(code: str, market: str = "CN") -> str:
     """获取单只股票实时行情数据，包括最新价、涨跌幅、成交量、市盈率、总市值等。
 
@@ -80,6 +79,7 @@ async def tool_query_single_quote(code: str, market: str = "CN") -> str:
     return _format_result(result)
 
 
+@filter.llm_tool
 async def tool_query_historical_kline(code: str, market: str = "CN",
                                       days: int = 60) -> str:
     """获取股票历史K线数据（近N个交易日），包含日期、开高低收、成交量、MA均线。
@@ -102,6 +102,7 @@ async def tool_query_historical_kline(code: str, market: str = "CN",
     return _format_result(result)
 
 
+@filter.llm_tool
 async def tool_query_fund_flow(code: str, market: str = "CN",
                                period: int = 30) -> str:
     """获取股票资金流向数据（主力/大户/散户净流入流出），最大60日。
@@ -121,6 +122,7 @@ async def tool_query_fund_flow(code: str, market: str = "CN",
     return _format_result(result)
 
 
+@filter.llm_tool
 async def tool_query_market_ranking(set_domain: int = 6, want_num: int = 10,
                                     sort_type: int = 1) -> str:
     """查询A股涨跌排名。
@@ -141,6 +143,7 @@ async def tool_query_market_ranking(set_domain: int = 6, want_num: int = 10,
 # 财报数据工具组
 # ============================================================
 
+@filter.llm_tool
 async def tool_query_financials(code: str, market: str = "CN") -> str:
     """获取股票最新财务报表数据：资产负债表、利润表、现金流量表。
 
@@ -191,9 +194,10 @@ async def tool_query_financials(code: str, market: str = "CN") -> str:
 
 
 # ============================================================
-# 工具组: 宏观经济
+# 宏观经济工具组
 # ============================================================
 
+@filter.llm_tool
 async def tool_query_macro_data(query: str) -> str:
     """查询全球宏观经济指标数据。
 
@@ -214,9 +218,10 @@ async def tool_query_macro_data(query: str) -> str:
 
 
 # ============================================================
-# 工具组: 智能选股
+# 智能选股工具组
 # ============================================================
 
+@filter.llm_tool
 async def tool_smart_stock_picking(searchstring: str,
                                    searchtype: str = "stock") -> str:
     """根据自然语言条件筛选股票。
@@ -240,76 +245,52 @@ async def tool_smart_stock_picking(searchstring: str,
 
 
 # ============================================================
-# 工具分组字典（供 WebUI SubAgent 编排参考）
+# 工具分组参考（供 WebUI SubAgent 编排时查看）
 # ============================================================
 
 TOOL_GROUPS = {
     "market_analyst": {
-        "tools": [
-            tool_query_single_quote,
-            tool_query_historical_kline,
-            tool_query_fund_flow,
-            tool_query_market_ranking,
+        "tool_names": [
+            "tool_query_single_quote",
+            "tool_query_historical_kline",
+            "tool_query_fund_flow",
+            "tool_query_market_ranking",
         ],
-        "description": (
-            "行情数据工具组 —— 分配给市场技术面分析师子智能体。"
-            "提供实时行情、历史K线、资金流向、涨跌排名。"
-        ),
+        "description": "行情数据工具组 —— 分配给市场技术面分析师。提供实时行情、历史K线、资金流向、涨跌排名。",
     },
     "fundamentals_analyst": {
-        "tools": [
-            tool_query_financials,
-            tool_query_single_quote,
+        "tool_names": [
+            "tool_query_financials",
+            "tool_query_single_quote",
         ],
-        "description": (
-            "财报数据工具组 —— 分配给基本面分析师子智能体。"
-            "提供资产负债表、利润表、现金流量表。"
-        ),
+        "description": "财报数据工具组 —— 分配给基本面分析师。提供资产负债表、利润表、现金流量表。",
     },
     "news_analyst": {
-        "tools": [
-            tool_query_macro_data,
-            tool_query_single_quote,
-            tool_query_fund_flow,
+        "tool_names": [
+            "tool_query_macro_data",
+            "tool_query_single_quote",
+            "tool_query_fund_flow",
         ],
-        "description": (
-            "宏观/新闻工具组 —— 分配给新闻情绪分析师子智能体。"
-            "提供宏观经济指标、资金流向判断市场情绪。"
-        ),
+        "description": "宏观/新闻工具组 —— 分配给新闻情绪分析师。提供宏观经济指标、资金流向判断市场情绪。",
     },
     "main_agent": {
-        "tools": [
-            tool_smart_stock_picking,
-            tool_query_single_quote,
-            tool_query_historical_kline,
-            tool_query_fund_flow,
-            tool_query_financials,
-            tool_query_macro_data,
-            tool_query_market_ranking,
+        "tool_names": [
+            "tool_smart_stock_picking",
+            "tool_query_single_quote",
+            "tool_query_historical_kline",
+            "tool_query_fund_flow",
+            "tool_query_financials",
+            "tool_query_macro_data",
+            "tool_query_market_ranking",
         ],
-        "description": (
-            "主智能体工具组 —— 完整工具集，用于选股和综合协调。"
-        ),
+        "description": "主智能体工具组 —— 完整工具集，用于选股和综合协调。",
     },
     "debate_researcher": {
-        "tools": [
-            tool_query_single_quote,
-            tool_query_historical_kline,
-            tool_query_fund_flow,
+        "tool_names": [
+            "tool_query_single_quote",
+            "tool_query_historical_kline",
+            "tool_query_fund_flow",
         ],
-        "description": (
-            "多空研究员工具组 —— 行情数据，用于支撑多空论点。"
-        ),
+        "description": "多空研究员工具组 —— 行情数据，用于支撑多空论点。",
     },
 }
-
-# 所有工具的扁平列表（供 AstrBot 框架发现）
-ALL_TOOLS = [
-    tool_query_single_quote,
-    tool_query_historical_kline,
-    tool_query_fund_flow,
-    tool_query_market_ranking,
-    tool_query_financials,
-    tool_query_macro_data,
-    tool_smart_stock_picking,
-]

@@ -29,6 +29,9 @@ from .utils.report_utils import (
 )
 from .data_sources.http_client import is_available as guosen_available
 
+# 导入工具模块触发 @filter.llm_tool 注册（AstrBot 框架发现工具）
+from . import astrbot_tools  # noqa: F401
+
 # ============================================================
 # 自然语言意图识别 prompt
 # ============================================================
